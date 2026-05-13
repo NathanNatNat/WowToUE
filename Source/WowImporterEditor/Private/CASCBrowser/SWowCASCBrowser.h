@@ -65,6 +65,7 @@ private:
 	// Preview
 	void PreviewBLP(uint32 FileDataID, const FString& FileName);
 	void PreviewM2(uint32 FileDataID, const FString& FileName);
+	void PreviewM3(uint32 FileDataID, const FString& FileName);
 	void ClearPreview();
 	FReply OnExportClicked();
 

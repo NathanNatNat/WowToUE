@@ -5,6 +5,7 @@
 #include "3D/loaders/M2Loader.h"
 #include "3D/loaders/M2Generics.h"
 #include "3D/loaders/SKELLoader.h"
+#include "3D/loaders/M3Loader.h"
 #include "3D/Skin.h"
 #include "3D/Texture.h"
 #include "3D/BoneMapper.h"
@@ -365,6 +366,91 @@ bool FWowM2Loader::LoadM2(uint32 FileDataID, FWowM2ModelData& OutModel, FM2LoadR
 	catch (const std::exception& e)
 	{
 		UE_LOG(LogWowM2, Error, TEXT("LoadM2(%u) failed: %s"), FileDataID, UTF8_TO_TCHAR(e.what()));
+		OutError = UTF8_TO_TCHAR(e.what());
+		return false;
+	}
+}
+
+bool FWowM2Loader::LoadM3(uint32 FileDataID, FWowM2ModelData& OutModel, FString& OutError)
+{
+	if (!FWowCASCInterface::Get().IsLoaded())
+	{
+		OutError = TEXT("CASC not loaded");
+		return false;
+	}
+
+	try
+	{
+		auto Buf = MakeShared<BufferWrapper>(FWowCASCInterface::Get().GetFileData(FileDataID));
+		M3Loader Loader(*Buf);
+		Loader.load();
+
+		OutModel.FileDataID = FileDataID;
+
+		// M3 vertices use same coordinate system as M2 raw vertices
+		uint32 VertCount = static_cast<uint32>(Loader.vertices.size() / 3);
+		OutModel.VertexCount = VertCount;
+		OutModel.Positions.SetNumUninitialized(VertCount);
+		OutModel.Normals.SetNumUninitialized(VertCount);
+
+		for (uint32 i = 0; i < VertCount; ++i)
+		{
+			float wx = Loader.vertices[i * 3 + 0];
+			float wy = Loader.vertices[i * 3 + 1];
+			float wz = Loader.vertices[i * 3 + 2];
+			OutModel.Positions[i] = FVector3f(-wy * 100.f, wx * 100.f, wz * 100.f);
+
+			if (i * 3 + 2 < Loader.normals.size())
+			{
+				float nx = Loader.normals[i * 3 + 0];
+				float ny = Loader.normals[i * 3 + 1];
+				float nz = Loader.normals[i * 3 + 2];
+				OutModel.Normals[i] = FVector3f(-ny, nx, nz);
+			}
+		}
+
+		uint32 UVCount = static_cast<uint32>(Loader.uv.size() / 2);
+		OutModel.UVs.SetNumUninitialized(FMath::Min(UVCount, VertCount));
+		for (int32 i = 0; i < OutModel.UVs.Num(); ++i)
+			OutModel.UVs[i] = FVector2f(Loader.uv[i * 2], Loader.uv[i * 2 + 1]);
+
+		// M3 indices are direct (no skin indirection)
+		OutModel.Indices.SetNumUninitialized(Loader.indices.size());
+		for (size_t i = 0; i < Loader.indices.size(); ++i)
+			OutModel.Indices[i] = Loader.indices[i];
+
+		// For M3, Triangles = Indices (no skin indirection layer)
+		OutModel.Triangles = OutModel.Indices;
+		OutModel.TriangleCount = static_cast<uint32>(Loader.indices.size() / 3);
+
+		// Geosets from first LOD only
+		uint32 GeosetCount = Loader.geosetCountPerLOD;
+		for (uint32 i = 0; i < GeosetCount && i < static_cast<uint32>(Loader.geosets.size()); ++i)
+		{
+			const auto& G = Loader.geosets[i];
+			FWowSubMeshData Sub;
+			Sub.SubmeshID = 0;
+			Sub.TriangleStart = G.indexStart;
+			Sub.TriangleCount = G.indexCount;
+			Sub.TextureComboIndex = 0xFFFF;
+			OutModel.SubMeshes.Add(Sub);
+		}
+
+		// Use render batches to assign materials
+		for (const auto& RB : Loader.renderBatches)
+		{
+			if (RB.geosetIndex < OutModel.SubMeshes.Num())
+				OutModel.SubMeshes[RB.geosetIndex].TextureComboIndex = 0; // Flag as having a texture unit
+		}
+
+		UE_LOG(LogWowM2, Log, TEXT("LoadM3(%u): %d verts, %d tris, %d geosets"),
+			FileDataID, OutModel.VertexCount, OutModel.TriangleCount, OutModel.SubMeshes.Num());
+
+		return true;
+	}
+	catch (const std::exception& e)
+	{
+		UE_LOG(LogWowM2, Error, TEXT("LoadM3(%u) failed: %s"), FileDataID, UTF8_TO_TCHAR(e.what()));
 		OutError = UTF8_TO_TCHAR(e.what());
 		return false;
 	}

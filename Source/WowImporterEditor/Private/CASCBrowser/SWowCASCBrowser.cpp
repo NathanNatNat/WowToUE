@@ -440,6 +440,10 @@ void SWowCASCBrowser::OnFileSelectionChanged(TSharedPtr<FWowFileEntry> Item, ESe
 	{
 		PreviewM2(Item->FileDataID, Item->FileName);
 	}
+	else if (Ext.Equals(TEXT("m3"), ESearchCase::IgnoreCase))
+	{
+		PreviewM3(Item->FileDataID, Item->FileName);
+	}
 	else
 	{
 		ClearPreview();
@@ -880,6 +884,40 @@ void SWowCASCBrowser::PreviewM2(uint32 FileDataID, const FString& FileName)
 			FString Info = FString::Printf(TEXT("%s\n%d verts, %d tris, %d bones, %d anims"),
 				*ModelDataPtr->Name, ModelDataPtr->VertexCount, ModelDataPtr->TriangleCount,
 				ModelDataPtr->BoneCount, ModelDataPtr->AnimationCount);
+			PreviewInfoText->SetText(FText::FromString(Info));
+		});
+	});
+}
+
+void SWowCASCBrowser::PreviewM3(uint32 FileDataID, const FString& FileName)
+{
+	ClearPreview();
+	PreviewInfoText->SetText(FText::FromString(FString::Printf(TEXT("Loading %s..."), *FileName)));
+
+	Async(EAsyncExecution::Thread, [this, FileDataID, FileName]()
+	{
+		auto ModelDataPtr = MakeShared<FWowM2ModelData>();
+		FString Error;
+
+		bool bSuccess = FWowM2Loader::LoadM3(FileDataID, *ModelDataPtr, Error);
+
+		AsyncTask(ENamedThreads::GameThread, [this, bSuccess, ModelDataPtr, FileName, Error]()
+		{
+			if (!bSuccess)
+			{
+				PreviewInfoText->SetText(FText::FromString(FString::Printf(TEXT("Failed to load M3: %s"), *Error)));
+				return;
+			}
+
+			PreviewImage->SetVisibility(EVisibility::Collapsed);
+			ModelPreview->SetVisibility(EVisibility::Visible);
+			CurrentModelData = *ModelDataPtr;
+			ModelPreview->SetM2Model(*ModelDataPtr, nullptr);
+
+			BuildGeosetPanel();
+
+			FString Info = FString::Printf(TEXT("%s\n%d verts, %d tris"),
+				*FileName, ModelDataPtr->VertexCount, ModelDataPtr->TriangleCount);
 			PreviewInfoText->SetText(FText::FromString(Info));
 		});
 	});

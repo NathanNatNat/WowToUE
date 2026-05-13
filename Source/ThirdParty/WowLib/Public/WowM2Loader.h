@@ -99,6 +99,7 @@ public:
 	};
 
 	static bool LoadM2(uint32 FileDataID, FWowM2ModelData& OutModel, FM2LoadResult& OutResult, FString& OutError);
+	static bool LoadM3(uint32 FileDataID, FWowM2ModelData& OutModel, FString& OutError);
 	static bool ResolveCreatureTextures(FWowM2ModelData& Model, FString& OutError);
 	static bool GetCreatureDisplays(uint32 M2FileDataID, TArray<FWowCreatureDisplay>& OutDisplays, FString& OutError);
 };
