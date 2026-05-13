@@ -470,17 +470,20 @@ void SWowCASCBrowser::ClearPreview()
 void SWowCASCBrowser::ClearGeosetPanel()
 {
 	if (GeosetPanel.IsValid())
+	{
+		GeosetPanel->ClearChildren();
 		GeosetPanel->SetVisibility(EVisibility::Collapsed);
-	if (GeosetCheckboxList.IsValid())
-		GeosetCheckboxList->ClearChildren();
+	}
 	CreatureDisplays.Empty();
-	if (SkinListView.IsValid())
-		SkinListView->RequestListRefresh();
+	SkinListView.Reset();
 }
 
 void SWowCASCBrowser::BuildGeosetPanel()
 {
-	ClearGeosetPanel();
+	if (!GeosetPanel.IsValid())
+		return;
+
+	GeosetPanel->ClearChildren();
 
 	int32 NumSubs = ModelPreview->GetNumSubMeshes();
 	if (NumSubs == 0)
@@ -498,13 +501,14 @@ void SWowCASCBrowser::BuildGeosetPanel()
 		.Text(LOCTEXT("GeosetsHeader", "Geosets"))
 	];
 
-	// Geoset checkboxes in scrollbox
+	// Geoset checkboxes in scrollable box — 50% of panel height
 	TSharedPtr<SScrollBox> GeosetScroll;
 	GeosetPanel->AddSlot()
 	.FillHeight(1.0f)
 	.Padding(4, 0)
 	[
 		SAssignNew(GeosetScroll, SScrollBox)
+		.ScrollBarAlwaysVisible(true)
 	];
 
 	for (int32 i = 0; i < NumSubs; ++i)
@@ -583,37 +587,34 @@ void SWowCASCBrowser::BuildGeosetPanel()
 		]
 	];
 
-	// Skins section (only if creature displays exist)
-	if (CreatureDisplays.Num() > 0)
-	{
-		GeosetPanel->AddSlot()
-		.AutoHeight()
-		.Padding(4, 8, 4, 4)
-		[
-			SNew(STextBlock)
-			.Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))
-			.Text(LOCTEXT("SkinsHeader", "Skins"))
-		];
+	// Skins section — always present, 50% of panel height
+	GeosetPanel->AddSlot()
+	.AutoHeight()
+	.Padding(4, 8, 4, 4)
+	[
+		SNew(STextBlock)
+		.Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))
+		.Text(LOCTEXT("SkinsHeader", "Skins"))
+	];
 
-		GeosetPanel->AddSlot()
-		.FillHeight(1.0f)
-		.Padding(4, 0)
-		[
-			SAssignNew(SkinListView, SListView<TSharedPtr<FWowCreatureDisplay>>)
-			.ListItemsSource(&CreatureDisplays)
-			.OnGenerateRow_Lambda([](TSharedPtr<FWowCreatureDisplay> Item, const TSharedRef<STableViewBase>& Owner)
-			{
-				return SNew(STableRow<TSharedPtr<FWowCreatureDisplay>>, Owner)
-				[
-					SNew(STextBlock)
-					.Text(FText::FromString(Item->Label))
-					.Font(FCoreStyle::GetDefaultFontStyle("Regular", 9))
-					.ToolTipText(FText::FromString(Item->Label))
-				];
-			})
-			.OnSelectionChanged(this, &SWowCASCBrowser::OnSkinSelected)
-		];
-	}
+	GeosetPanel->AddSlot()
+	.FillHeight(1.0f)
+	.Padding(4, 0)
+	[
+		SAssignNew(SkinListView, SListView<TSharedPtr<FWowCreatureDisplay>>)
+		.ListItemsSource(&CreatureDisplays)
+		.OnGenerateRow_Lambda([](TSharedPtr<FWowCreatureDisplay> Item, const TSharedRef<STableViewBase>& Owner)
+		{
+			return SNew(STableRow<TSharedPtr<FWowCreatureDisplay>>, Owner)
+			[
+				SNew(STextBlock)
+				.Text(FText::FromString(Item->Label))
+				.Font(FCoreStyle::GetDefaultFontStyle("Regular", 9))
+				.ToolTipText(FText::FromString(Item->Label))
+			];
+		})
+		.OnSelectionChanged(this, &SWowCASCBrowser::OnSkinSelected)
+	];
 
 	GeosetPanel->SetVisibility(EVisibility::Visible);
 }
@@ -694,7 +695,11 @@ void SWowCASCBrowser::PreviewM2(uint32 FileDataID, const FString& FileName)
 		{
 			FString CreatureError;
 			FWowM2Loader::ResolveCreatureTextures(*ModelDataPtr, CreatureError);
-			FWowM2Loader::GetCreatureDisplays(FileDataID, *DisplaysPtr, CreatureError);
+
+			FString DisplayError;
+			bool bDisplaySuccess = FWowM2Loader::GetCreatureDisplays(FileDataID, *DisplaysPtr, DisplayError);
+			UE_LOG(LogTemp, Log, TEXT("GetCreatureDisplays(%u): success=%d, count=%d, error='%s'"),
+				FileDataID, bDisplaySuccess, DisplaysPtr->Num(), *DisplayError);
 		}
 
 		AsyncTask(ENamedThreads::GameThread, [this, bSuccess, ModelDataPtr, DisplaysPtr, FileName, Error]()
@@ -854,6 +859,11 @@ FReply SWowCASCBrowser::OnConnectClicked()
 
 FReply SWowCASCBrowser::OnLoadBuildClicked()
 {
+	if (bBuildLoading)
+		return FReply::Handled();
+
+	bBuildLoading = true;
+
 	StatusText->SetText(FText::Format(
 		LOCTEXT("LoadingBuild", "Loading build {0}... (this may take a few seconds)"),
 		FText::AsNumber(SelectedBuildIndex)));
@@ -891,6 +901,7 @@ void SWowCASCBrowser::HandleCASCInitialized()
 void SWowCASCBrowser::HandleBuildLoaded()
 {
 	bBuildLoaded = true;
+	bBuildLoading = false;
 	BuildListBox->ClearChildren();
 
 	StatusText->SetText(FText::Format(
@@ -903,6 +914,7 @@ void SWowCASCBrowser::HandleBuildLoaded()
 
 void SWowCASCBrowser::HandleCASCError(const FString& Error)
 {
+	bBuildLoading = false;
 	StatusText->SetText(FText::Format(
 		LOCTEXT("Error", "Error: {0}"),
 		FText::FromString(Error)));

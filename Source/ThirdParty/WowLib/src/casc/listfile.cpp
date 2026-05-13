@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <future>
 #include <mutex>
+#include <shared_mutex>
 #include <regex>
 #include <chrono>
 #include <cstring>
@@ -32,6 +33,7 @@ namespace listfile {
 
 static std::unordered_map<std::string, uint32_t> legacy_name_lookup;
 static std::unordered_map<uint32_t, std::string> legacy_id_lookup;
+static std::shared_mutex legacy_data_mutex;
 
 static bool loaded = false;
 
@@ -311,8 +313,9 @@ bool prepareListfile() {
 static size_t loadIDTable(const std::unordered_set<uint32_t>& ids, const std::string& ext) {
 	size_t loadCount = 0;
 
+	std::unique_lock lock(legacy_data_mutex);
 	for (uint32_t fileDataID : ids) {
-		if (!existsByID(fileDataID)) {
+		if (!legacy_id_lookup.contains(fileDataID)) {
 			std::string fileName = "unknown/" + std::to_string(fileDataID) + ext;
 			legacy_id_lookup[fileDataID] = fileName;
 			legacy_name_lookup[fileName] = fileDataID;
@@ -361,10 +364,12 @@ std::future<void> loadUnknownsAsync() {
 }
 
 bool existsByID(uint32_t id) {
+	std::shared_lock lock(legacy_data_mutex);
 	return legacy_id_lookup.contains(id);
 }
 
 std::optional<std::string> getByID(uint32_t id) {
+	std::shared_lock lock(legacy_data_mutex);
 	auto it = legacy_id_lookup.find(id);
 	if (it != legacy_id_lookup.end())
 		return it->second;
@@ -389,6 +394,7 @@ std::optional<uint32_t> getByFilename(const std::string& filename) {
 	std::optional<uint32_t> lookup;
 
 	{
+		std::shared_lock lock(legacy_data_mutex);
 		auto it = legacy_name_lookup.find(lower);
 		if (it != legacy_name_lookup.end())
 			lookup = it->second;
@@ -403,17 +409,20 @@ std::optional<uint32_t> getByFilename(const std::string& filename) {
 std::vector<std::string> getFilenamesByExtension(const std::vector<ExtFilter>& exts) {
 	std::vector<uint32_t> entries;
 
-	for (const auto& [fileDataID, fn] : legacy_id_lookup) {
-		for (const auto& ext : exts) {
-			if (ext.has_exclusion && ext.exclusion_regex) {
-				if (fn.ends_with(ext.ext) && !std::regex_search(fn, *ext.exclusion_regex)) {
-					entries.push_back(fileDataID);
-					break;
-				}
-			} else {
-				if (fn.ends_with(ext.ext)) {
-					entries.push_back(fileDataID);
-					break;
+	{
+		std::shared_lock lock(legacy_data_mutex);
+		for (const auto& [fileDataID, fn] : legacy_id_lookup) {
+			for (const auto& ext : exts) {
+				if (ext.has_exclusion && ext.exclusion_regex) {
+					if (fn.ends_with(ext.ext) && !std::regex_search(fn, *ext.exclusion_regex)) {
+						entries.push_back(fileDataID);
+						break;
+					}
+				} else {
+					if (fn.ends_with(ext.ext)) {
+						entries.push_back(fileDataID);
+						break;
+					}
 				}
 			}
 		}
@@ -454,11 +463,14 @@ std::optional<int> applyPreload(const std::unordered_set<uint32_t>& rootEntries)
 		logging::write("Applying preloaded listfile data...");
 
 		size_t valid_entries = 0;
-		for (const auto& [fileDataID, fileName] : preloadedIdLookup) {
-			if (rootEntries.contains(fileDataID)) {
-				legacy_id_lookup[fileDataID] = fileName;
-				legacy_name_lookup[fileName] = fileDataID;
-				valid_entries++;
+		{
+			std::unique_lock lock(legacy_data_mutex);
+			for (const auto& [fileDataID, fileName] : preloadedIdLookup) {
+				if (rootEntries.contains(fileDataID)) {
+					legacy_id_lookup[fileDataID] = fileName;
+					legacy_name_lookup[fileName] = fileDataID;
+					valid_entries++;
+				}
 			}
 		}
 
@@ -505,6 +517,7 @@ static std::vector<FilteredEntry> getFilteredEntriesImpl(const std::string* sear
 		return fileName.find(*search) != std::string::npos;
 	};
 
+	std::shared_lock lock(legacy_data_mutex);
 	for (const auto& [fileDataID, fileName] : legacy_id_lookup) {
 		if (matches(fileName))
 			results.push_back({fileDataID, fileName});
@@ -531,15 +544,18 @@ std::vector<std::string> renderListfile(const std::optional<std::vector<uint32_t
 	if (has_id_filter)
 		id_set.insert(file_data_ids->begin(), file_data_ids->end());
 
-	if (!has_id_filter) {
-		for (const auto& [file_data_id, fn] : legacy_id_lookup) {
-			result.push_back(fn + " [" + std::to_string(file_data_id) + "]");
-		}
-	} else {
-		for (const auto& [file_data_id, fn] : legacy_id_lookup) {
-			if (id_set.contains(file_data_id)) {
+	{
+		std::shared_lock lock(legacy_data_mutex);
+		if (!has_id_filter) {
+			for (const auto& [file_data_id, fn] : legacy_id_lookup) {
 				result.push_back(fn + " [" + std::to_string(file_data_id) + "]");
-				seen_ids.insert(file_data_id);
+			}
+		} else {
+			for (const auto& [file_data_id, fn] : legacy_id_lookup) {
+				if (id_set.contains(file_data_id)) {
+					result.push_back(fn + " [" + std::to_string(file_data_id) + "]");
+					seen_ids.insert(file_data_id);
+				}
 			}
 		}
 	}
@@ -591,6 +607,7 @@ bool isLoaded() {
 }
 
 void ingestIdentifiedFiles(const std::vector<std::pair<uint32_t, std::string>>& entries) {
+	std::unique_lock lock(legacy_data_mutex);
 	for (const auto& [fileDataID, ext] : entries) {
 		std::string fileName = "unknown/" + std::to_string(fileDataID) + ext;
 		legacy_id_lookup[fileDataID] = fileName;
@@ -604,8 +621,11 @@ void addEntry(uint32_t fileDataID, const std::string& fileName,
 	std::transform(lower.begin(), lower.end(), lower.begin(),
 		[](unsigned char c) { return std::tolower(c); });
 
-	legacy_id_lookup[fileDataID] = lower;
-	legacy_name_lookup[lower] = fileDataID;
+	{
+		std::unique_lock lock(legacy_data_mutex);
+		legacy_id_lookup[fileDataID] = lower;
+		legacy_name_lookup[lower] = fileDataID;
+	}
 
 	if (listfile_out)
 		listfile_out->push_back(lower + " [" + std::to_string(fileDataID) + "]");

@@ -128,4 +128,5 @@ private:
 	EBrowserTab ActiveTab = EBrowserTab::Models;
 	int32 SelectedBuildIndex = 0;
 	bool bBuildLoaded = false;
+	bool bBuildLoading = false;
 };

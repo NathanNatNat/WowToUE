@@ -214,11 +214,18 @@ bool FWowM2Loader::GetCreatureDisplays(uint32 M2FileDataID, TArray<FWowCreatureD
 		if (!Displays || Displays->empty())
 			return true;
 
+		TSet<uint32> SeenPrimaryTextures;
+
 		for (const auto& DisplayRef : *Displays)
 		{
 			const auto& D = DisplayRef.get();
 			if (D.textures.empty())
 				continue;
+
+			uint32 PrimaryTex = D.textures[0];
+			if (SeenPrimaryTextures.Contains(PrimaryTex))
+				continue;
+			SeenPrimaryTextures.Add(PrimaryTex);
 
 			FWowCreatureDisplay Entry;
 			Entry.DisplayID = D.ID;
