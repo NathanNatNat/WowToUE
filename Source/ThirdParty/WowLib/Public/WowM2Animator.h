@@ -1,6 +1,7 @@
 // WowM2Animator — Per-frame bone animation calculator for M2 models.
 //
 // Matches wow.export JS M2RendererGL._update_bone_matrices() exactly.
+// Handles external skeleton files (SKELLoader) for models that use them.
 // Calculates bone transforms from animation tracks and outputs FTransform arrays
 // for use with UPoseableMeshComponent.
 
@@ -9,11 +10,12 @@
 #include "CoreMinimal.h"
 
 class M2Loader;
+class SKELLoader;
 
 class WOWLIB_API FWowM2Animator
 {
 public:
-	void Initialize(M2Loader* InLoader);
+	void Initialize(M2Loader* InLoader, SKELLoader* InSkelLoader = nullptr, SKELLoader* InChildSkelLoader = nullptr);
 
 	void PlayAnimation(int32 AnimIndex);
 	void StopAnimation();
@@ -36,11 +38,14 @@ private:
 	FQuat SampleQuat(int32 BoneIndex, int32 AnimIdx, float TimeMs);
 
 	M2Loader* Loader = nullptr;
+	SKELLoader* SkelLoader = nullptr;
+	SKELLoader* ChildSkelLoader = nullptr;
 
 	int32 CurrentAnimIndex = -1;
 	float AnimationTime = 0.f;
 	int32 HandsClosedAnimIndex = -1;
 
+	int32 BoneCount = 0;
 	TArray<FTransform> BoneLocalTransforms;
 	TArray<bool> BoneCalculated;
 };

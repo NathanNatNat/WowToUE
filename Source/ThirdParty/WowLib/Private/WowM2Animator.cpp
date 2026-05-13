@@ -1,48 +1,73 @@
 #include "WowM2Animator.h"
 #include "3D/loaders/M2Loader.h"
 #include "3D/loaders/M2Generics.h"
+#include "3D/loaders/SKELLoader.h"
 
-void FWowM2Animator::Initialize(M2Loader* InLoader)
+void FWowM2Animator::Initialize(M2Loader* InLoader, SKELLoader* InSkelLoader, SKELLoader* InChildSkelLoader)
 {
 	Loader = InLoader;
+	SkelLoader = InSkelLoader;
+	ChildSkelLoader = InChildSkelLoader;
 	if (!Loader) return;
 
-	HandsClosedAnimIndex = -1;
-	for (size_t i = 0; i < Loader->animations.size(); ++i)
+	// Determine bone count from the correct source (matching wow.export _create_skeleton)
+	if (InSkelLoader && InSkelLoader->parent_skel_file_id > 0 && InChildSkelLoader)
 	{
-		if (Loader->animations[i].id == 15)
-		{
-			HandsClosedAnimIndex = static_cast<int32>(i);
-			break;
-		}
+		// Parent skel has the structural bones
+		BoneCount = static_cast<int32>(InSkelLoader->bones.size());
+	}
+	else if (InSkelLoader && !InSkelLoader->bones.empty())
+		BoneCount = static_cast<int32>(InSkelLoader->bones.size());
+	else
+		BoneCount = static_cast<int32>(Loader->bones.size());
+
+	// Find HandsClosed from the animation source
+	HandsClosedAnimIndex = -1;
+	if (SkelLoader && !SkelLoader->animations.empty())
+	{
+		for (size_t i = 0; i < SkelLoader->animations.size(); ++i)
+			if (SkelLoader->animations[i].id == 15) { HandsClosedAnimIndex = static_cast<int32>(i); break; }
+	}
+	else if (Loader)
+	{
+		for (size_t i = 0; i < Loader->animations.size(); ++i)
+			if (Loader->animations[i].id == 15) { HandsClosedAnimIndex = static_cast<int32>(i); break; }
 	}
 
-	BoneLocalTransforms.SetNum(Loader->bones.size());
-	BoneCalculated.SetNum(Loader->bones.size());
+	BoneLocalTransforms.SetNum(BoneCount);
+	BoneCalculated.SetNum(BoneCount);
 
 	StopAnimation();
+}
+
+static int32 GetAnimCount(M2Loader* Loader, SKELLoader* SkelLoader)
+{
+	if (SkelLoader && !SkelLoader->animations.empty())
+		return static_cast<int32>(SkelLoader->animations.size());
+	return Loader ? static_cast<int32>(Loader->animations.size()) : 0;
+}
+
+static uint32 GetAnimDuration(M2Loader* Loader, SKELLoader* SkelLoader, int32 Index)
+{
+	if (SkelLoader && Index >= 0 && Index < static_cast<int32>(SkelLoader->animations.size()))
+		return SkelLoader->animations[Index].duration;
+	if (Loader && Index >= 0 && Index < static_cast<int32>(Loader->animations.size()))
+		return Loader->animations[Index].duration;
+	return 0;
 }
 
 void FWowM2Animator::PlayAnimation(int32 AnimIndex)
 {
 	if (!Loader) return;
 
-	if (AnimIndex >= 0 && AnimIndex < static_cast<int32>(Loader->animations.size()))
+	int32 AnimCount = GetAnimCount(Loader, SkelLoader);
+	if (AnimIndex >= 0 && AnimIndex < AnimCount)
 	{
-		auto& Anim = Loader->animations[AnimIndex];
-		int32 ResolvedIndex = AnimIndex;
-
-		// Resolve alias animations (flag 0x40)
-		while (Anim.flags & 0x40)
-		{
-			ResolvedIndex = Anim.aliasNext;
-			if (ResolvedIndex < 0 || ResolvedIndex >= static_cast<int32>(Loader->animations.size()))
-				break;
-			Anim = Loader->animations[ResolvedIndex];
-		}
-
 		// Load external .anim data if needed
-		Loader->loadAnimsForIndex(ResolvedIndex).get();
+		if (SkelLoader)
+			SkelLoader->loadAnimsForIndex(AnimIndex);
+		else
+			Loader->loadAnimsForIndex(AnimIndex).get();
 	}
 
 	CurrentAnimIndex = AnimIndex;
@@ -74,9 +99,7 @@ void FWowM2Animator::Update(float DeltaTimeSeconds)
 
 float FWowM2Animator::GetDuration() const
 {
-	if (!Loader || CurrentAnimIndex < 0 || CurrentAnimIndex >= static_cast<int32>(Loader->animations.size()))
-		return 0.f;
-	return Loader->animations[CurrentAnimIndex].duration / 1000.f;
+	return GetAnimDuration(Loader, SkelLoader, CurrentAnimIndex) / 1000.f;
 }
 
 int32 FWowM2Animator::GetFrameCount() const
@@ -165,14 +188,28 @@ static FQuat GetQuat(const M2Value& V)
 	return FQuat::Identity;
 }
 
+// Get the animation track for a bone — uses SKEL bones if available, fallback to M2
+const M2Track* GetBoneTrack(M2Loader* Loader, SKELLoader* SkelLoader, int32 BoneIndex, int32 TrackType)
+{
+	if (SkelLoader && BoneIndex < static_cast<int32>(SkelLoader->bones.size()))
+	{
+		if (TrackType == 0) return &SkelLoader->bones[BoneIndex].translation;
+		if (TrackType == 1) return &SkelLoader->bones[BoneIndex].scale;
+		return &SkelLoader->bones[BoneIndex].rotation;
+	}
+	if (Loader && BoneIndex < static_cast<int32>(Loader->bones.size()))
+	{
+		if (TrackType == 0) return &Loader->bones[BoneIndex].translation;
+		if (TrackType == 1) return &Loader->bones[BoneIndex].scale;
+		return &Loader->bones[BoneIndex].rotation;
+	}
+	return nullptr;
+}
+
 FVector FWowM2Animator::SampleVec3(int32 BoneIndex, int32 TrackType, int32 AnimIdx, float TimeMs, const FVector& Default)
 {
-	if (!Loader || BoneIndex < 0 || BoneIndex >= static_cast<int32>(Loader->bones.size()))
-		return Default;
-
-	const M2Track* Track = nullptr;
-	if (TrackType == 0) Track = &Loader->bones[BoneIndex].translation;
-	else Track = &Loader->bones[BoneIndex].scale;
+	const M2Track* Track = GetBoneTrack(Loader, SkelLoader, BoneIndex, TrackType);
+	if (!Track) return Default;
 
 	if (AnimIdx < 0 || AnimIdx >= static_cast<int32>(Track->timestamps.size()))
 		return Default;
@@ -201,10 +238,10 @@ FVector FWowM2Animator::SampleVec3(int32 BoneIndex, int32 TrackType, int32 AnimI
 
 FQuat FWowM2Animator::SampleQuat(int32 BoneIndex, int32 AnimIdx, float TimeMs)
 {
-	if (!Loader || BoneIndex < 0 || BoneIndex >= static_cast<int32>(Loader->bones.size()))
-		return FQuat::Identity;
+	const M2Track* TrackPtr = GetBoneTrack(Loader, SkelLoader, BoneIndex, 2);
+	if (!TrackPtr) return FQuat::Identity;
 
-	const auto& Track = Loader->bones[BoneIndex].rotation;
+	const auto& Track = *TrackPtr;
 
 	if (AnimIdx < 0 || AnimIdx >= static_cast<int32>(Track.timestamps.size()))
 		return FQuat::Identity;
@@ -233,9 +270,7 @@ FQuat FWowM2Animator::SampleQuat(int32 BoneIndex, int32 AnimIdx, float TimeMs)
 
 void FWowM2Animator::CalcAllBones()
 {
-	if (!Loader || Loader->bones.empty()) return;
-
-	const int32 BoneCount = static_cast<int32>(Loader->bones.size());
+	if (BoneCount == 0) return;
 	const float TimeMs = AnimationTime * 1000.f;
 	const int32 AnimIdx = CurrentAnimIndex;
 
@@ -252,13 +287,30 @@ void FWowM2Animator::CalcAllBones()
 		if (Idx < 0 || Idx >= BoneCount || BoneCalculated[Idx])
 			return;
 
-		const auto& Bone = Loader->bones[Idx];
-		int32 ParentIdx = Bone.parentBone;
+		// Get bone from correct source (SKEL or M2)
+		float Bpx = 0, Bpy = 0, Bpz = 0;
+		int32 ParentIdx = -1;
+		int32 BoneID = -1;
+
+		if (SkelLoader && Idx < static_cast<int32>(SkelLoader->bones.size()))
+		{
+			const auto& B = SkelLoader->bones[Idx];
+			ParentIdx = B.parentBone;
+			BoneID = B.boneID;
+			if (B.pivot.size() >= 3) { Bpx = B.pivot[0]; Bpy = B.pivot[1]; Bpz = B.pivot[2]; }
+		}
+		else if (Loader && Idx < static_cast<int32>(Loader->bones.size()))
+		{
+			const auto& B = Loader->bones[Idx];
+			ParentIdx = B.parentBone;
+			BoneID = B.boneID;
+			if (B.pivot.size() >= 3) { Bpx = B.pivot[0]; Bpy = B.pivot[1]; Bpz = B.pivot[2]; }
+		}
 
 		if (ParentIdx >= 0 && ParentIdx < BoneCount)
 			CalcBone(ParentIdx);
 
-		float Px = Bone.pivot[0], Py = Bone.pivot[1], Pz = Bone.pivot[2];
+		float Px = Bpx, Py = Bpy, Pz = Bpz;
 
 		int32 EffAnimIdx = AnimIdx;
 		float EffTimeMs = TimeMs;
@@ -266,8 +318,8 @@ void FWowM2Animator::CalcAllBones()
 		// Hand grip: finger bones use HandsClosed animation
 		if (HandsClosedAnimIndex >= 0)
 		{
-			bool bRightFinger = Bone.boneID >= 8 && Bone.boneID <= 12;
-			bool bLeftFinger = Bone.boneID >= 13 && Bone.boneID <= 17;
+			bool bRightFinger = BoneID >= 8 && BoneID <= 12;
+			bool bLeftFinger = BoneID >= 13 && BoneID <= 17;
 			if (bRightFinger || bLeftFinger)
 			{
 				EffAnimIdx = HandsClosedAnimIndex;
@@ -275,10 +327,14 @@ void FWowM2Animator::CalcAllBones()
 			}
 		}
 
-		bool bHasTrans = EffAnimIdx >= 0 && EffAnimIdx < static_cast<int32>(Bone.translation.timestamps.size()) && !Bone.translation.timestamps[EffAnimIdx].empty();
-		bool bHasRot = EffAnimIdx >= 0 && EffAnimIdx < static_cast<int32>(Bone.rotation.timestamps.size()) && !Bone.rotation.timestamps[EffAnimIdx].empty();
-		bool bHasScale = EffAnimIdx >= 0 && EffAnimIdx < static_cast<int32>(Bone.scale.timestamps.size()) && !Bone.scale.timestamps[EffAnimIdx].empty();
-		bool bHasScaleFallback = !bHasScale && EffAnimIdx != 0 && !Bone.scale.timestamps.empty() && !Bone.scale.timestamps[0].empty();
+		const M2Track* TransTrack = GetBoneTrack(Loader, SkelLoader, Idx, 0);
+		const M2Track* RotTrack = GetBoneTrack(Loader, SkelLoader, Idx, 2);
+		const M2Track* ScaleTrack = GetBoneTrack(Loader, SkelLoader, Idx, 1);
+
+		bool bHasTrans = TransTrack && EffAnimIdx >= 0 && EffAnimIdx < static_cast<int32>(TransTrack->timestamps.size()) && !TransTrack->timestamps[EffAnimIdx].empty();
+		bool bHasRot = RotTrack && EffAnimIdx >= 0 && EffAnimIdx < static_cast<int32>(RotTrack->timestamps.size()) && !RotTrack->timestamps[EffAnimIdx].empty();
+		bool bHasScale = ScaleTrack && EffAnimIdx >= 0 && EffAnimIdx < static_cast<int32>(ScaleTrack->timestamps.size()) && !ScaleTrack->timestamps[EffAnimIdx].empty();
+		bool bHasScaleFallback = !bHasScale && EffAnimIdx != 0 && ScaleTrack && !ScaleTrack->timestamps.empty() && !ScaleTrack->timestamps[0].empty();
 
 		FMatrix LocalMat = FMatrix::Identity;
 
@@ -349,7 +405,11 @@ void FWowM2Animator::CalcAllBones()
 	{
 		// Extract local mat in WowLib space
 		FMatrix WL_Local = FMatrix::Identity;
-		int32 ParentIdx = Loader->bones[i].parentBone;
+		int32 ParentIdx = -1;
+		if (SkelLoader && i < static_cast<int32>(SkelLoader->bones.size()))
+			ParentIdx = SkelLoader->bones[i].parentBone;
+		else if (Loader && i < static_cast<int32>(Loader->bones.size()))
+			ParentIdx = Loader->bones[i].parentBone;
 		if (ParentIdx >= 0 && ParentIdx < BoneCount)
 			WL_Local = ComponentMatrices[ParentIdx].Inverse() * ComponentMatrices[i];
 		else

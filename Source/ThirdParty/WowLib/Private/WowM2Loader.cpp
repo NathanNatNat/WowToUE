@@ -4,6 +4,7 @@
 
 #include "3D/loaders/M2Loader.h"
 #include "3D/loaders/M2Generics.h"
+#include "3D/loaders/SKELLoader.h"
 #include "3D/Skin.h"
 #include "3D/Texture.h"
 #include "3D/BoneMapper.h"
@@ -146,7 +147,7 @@ static void ApplyRestPoseSkinning(M2Loader& Loader)
 	}
 }
 
-bool FWowM2Loader::LoadM2(uint32 FileDataID, FWowM2ModelData& OutModel, TSharedPtr<BufferWrapper>& OutBuffer, TSharedPtr<M2Loader>& OutLoader, FString& OutError)
+bool FWowM2Loader::LoadM2(uint32 FileDataID, FWowM2ModelData& OutModel, FM2LoadResult& OutResult, FString& OutError)
 {
 	if (!FWowCASCInterface::Get().IsLoaded())
 	{
@@ -256,36 +257,92 @@ bool FWowM2Loader::LoadM2(uint32 FileDataID, FWowM2ModelData& OutModel, TSharedP
 			OutModel.Textures.Add(Ref);
 		}
 
-		// Bones
-		for (size_t i = 0; i < Loader.bones.size(); ++i)
+		// Load skeleton — external SKEL file if present, matching wow.export _create_skeleton()
+		TSharedPtr<BufferWrapper> SkelBuf, ParentSkelBuf;
+		TSharedPtr<SKELLoader> SkelLoader, ParentSkelLoader;
+
+		if (Loader.skeletonFileID > 0)
 		{
-			const auto& B = Loader.bones[i];
-			FWowBoneData Bone;
-			std::string BName = get_bone_name(B.boneID, static_cast<int>(i), B.boneNameCRC);
-			Bone.BoneName = FName(UTF8_TO_TCHAR(BName.c_str()));
-			Bone.ParentIndex = B.parentBone;
-			Bone.BoneID = B.boneID;
-			if (B.pivot.size() >= 3)
-				Bone.Pivot = FVector3f(B.pivot[2] * 100.f, B.pivot[0] * 100.f, B.pivot[1] * 100.f);
-			OutModel.Bones.Add(Bone);
+			try
+			{
+				SkelBuf = MakeShared<BufferWrapper>(FWowCASCInterface::Get().GetFileData(Loader.skeletonFileID));
+				SkelLoader = MakeShared<SKELLoader>(*SkelBuf);
+				SkelLoader->load();
+
+				if (SkelLoader->parent_skel_file_id > 0)
+				{
+					ParentSkelBuf = MakeShared<BufferWrapper>(FWowCASCInterface::Get().GetFileData(SkelLoader->parent_skel_file_id));
+					ParentSkelLoader = MakeShared<SKELLoader>(*ParentSkelBuf);
+					ParentSkelLoader->load();
+				}
+			}
+			catch (const std::exception& e)
+			{
+				UE_LOG(LogWowM2, Warning, TEXT("Failed to load skeleton: %s"), UTF8_TO_TCHAR(e.what()));
+			}
 		}
 
-		// Animations
-		for (size_t i = 0; i < Loader.animations.size(); ++i)
+		// Determine bone source: parent skel > skel > m2 (matching wow.export)
+		auto PopulateBones = [&](const auto& BoneSource)
 		{
-			const auto& A = Loader.animations[i];
-			FWowAnimationInfo Anim;
-			Anim.AnimIndex = static_cast<int32>(i);
-			Anim.AnimID = A.id;
-			Anim.VariationIndex = A.variationIndex;
-			Anim.DurationMs = A.duration;
-			std::string AName = get_anim_name(A.id);
-			Anim.Label = FString::Printf(TEXT("%s (%u.%u)"), UTF8_TO_TCHAR(AName.c_str()), A.id, A.variationIndex);
-			OutModel.Animations.Add(Anim);
+			for (size_t i = 0; i < BoneSource.size(); ++i)
+			{
+				const auto& B = BoneSource[i];
+				FWowBoneData Bone;
+				std::string BName = get_bone_name(B.boneID, static_cast<int>(i), B.boneNameCRC);
+				Bone.BoneName = FName(UTF8_TO_TCHAR(BName.c_str()));
+				Bone.ParentIndex = B.parentBone;
+				Bone.BoneID = B.boneID;
+				if (B.pivot.size() >= 3)
+					Bone.Pivot = FVector3f(B.pivot[2] * 100.f, B.pivot[0] * 100.f, B.pivot[1] * 100.f);
+				OutModel.Bones.Add(Bone);
+			}
+		};
 
-			if (A.id == 15 && OutModel.HandsClosedAnimIndex < 0)
-				OutModel.HandsClosedAnimIndex = static_cast<int32>(i);
+		if (ParentSkelLoader && !ParentSkelLoader->bones.empty())
+			PopulateBones(ParentSkelLoader->bones);
+		else if (SkelLoader && !SkelLoader->bones.empty())
+			PopulateBones(SkelLoader->bones);
+		else
+			PopulateBones(Loader.bones);
+
+		OutModel.BoneCount = static_cast<uint32>(OutModel.Bones.Num());
+
+		// Determine animation source: skel > m2 (matching wow.export)
+		auto PopulateAnims = [&](const auto& AnimSource)
+		{
+			for (size_t i = 0; i < AnimSource.size(); ++i)
+			{
+				const auto& A = AnimSource[i];
+				FWowAnimationInfo Anim;
+				Anim.AnimIndex = static_cast<int32>(i);
+				Anim.AnimID = A.id;
+				Anim.VariationIndex = A.variationIndex;
+				Anim.DurationMs = A.duration;
+				std::string AName = get_anim_name(A.id);
+				Anim.Label = FString::Printf(TEXT("%s (%u.%u)"), UTF8_TO_TCHAR(AName.c_str()), A.id, A.variationIndex);
+				OutModel.Animations.Add(Anim);
+
+				if (A.id == 15 && OutModel.HandsClosedAnimIndex < 0)
+					OutModel.HandsClosedAnimIndex = static_cast<int32>(i);
+			}
+		};
+
+		if (SkelLoader && !SkelLoader->animations.empty())
+		{
+			PopulateAnims(SkelLoader->animations);
+			// If parent skel exists, it's the main anim source; child overrides specific anims
+			if (ParentSkelLoader && !ParentSkelLoader->animations.empty())
+			{
+				OutModel.Animations.Empty();
+				OutModel.HandsClosedAnimIndex = -1;
+				PopulateAnims(ParentSkelLoader->animations);
+			}
 		}
+		else
+			PopulateAnims(Loader.animations);
+
+		OutModel.AnimationCount = static_cast<uint32>(OutModel.Animations.Num());
 
 		// Bone weights and indices (4 per vertex)
 		if (!Loader.boneWeights.empty())
@@ -297,8 +354,12 @@ bool FWowM2Loader::LoadM2(uint32 FileDataID, FWowM2ModelData& OutModel, TSharedP
 			FileDataID, *OutModel.Name, OutModel.VertexCount, OutModel.TriangleCount,
 			OutModel.BoneCount, OutModel.AnimationCount, OutModel.Textures.Num());
 
-		OutBuffer = LoaderBuf;
-		OutLoader = LoaderPtr;
+		OutResult.M2Buffer = LoaderBuf;
+		OutResult.Loader = LoaderPtr;
+		OutResult.SkelBuffer = SkelBuf;
+		OutResult.SkelLoader = SkelLoader;
+		OutResult.ParentSkelBuffer = ParentSkelBuf;
+		OutResult.ParentSkelLoader = ParentSkelLoader;
 		return true;
 	}
 	catch (const std::exception& e)

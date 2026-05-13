@@ -9,6 +9,7 @@
 
 class SWowModelPreview;
 class M2Loader;
+class SKELLoader;
 class BufferWrapper;
 
 class SWowCASCBrowser : public SCompoundWidget
@@ -92,6 +93,10 @@ private:
 	TSharedPtr<SHorizontalBox> QuickFilterBar;
 	TSharedPtr<BufferWrapper> CachedM2Buffer;
 	TSharedPtr<M2Loader> CachedM2Loader;
+	TSharedPtr<BufferWrapper> CachedSkelBuffer;
+	TSharedPtr<BufferWrapper> CachedParentSkelBuffer;
+	TSharedPtr<SKELLoader> CachedSkelLoader;
+	TSharedPtr<SKELLoader> CachedParentSkelLoader;
 	TSharedPtr<SVerticalBox> GeosetPanel;
 	TSharedPtr<SVerticalBox> GeosetCheckboxList;
 	TSharedPtr<SListView<TSharedPtr<FWowCreatureDisplay>>> SkinListView;

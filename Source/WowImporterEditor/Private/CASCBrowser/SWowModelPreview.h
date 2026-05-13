@@ -25,7 +25,7 @@ public:
 	void Construct(const FArguments& InArgs);
 	virtual ~SWowModelPreview();
 
-	void SetM2Model(const FWowM2ModelData& ModelData, M2Loader* InLoader);
+	void SetM2Model(const FWowM2ModelData& ModelData, M2Loader* InLoader, SKELLoader* InSkelLoader = nullptr, SKELLoader* InParentSkelLoader = nullptr);
 	void ClearModel();
 
 	void SetGeosetVisible(int32 SubMeshIndex, bool bVisible);

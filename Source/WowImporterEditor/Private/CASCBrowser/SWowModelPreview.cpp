@@ -1,6 +1,7 @@
 #include "CASCBrowser/SWowModelPreview.h"
 #include "WowCASCInterface.h"
 #include "WowM2Animator.h"
+#include "3D/loaders/SKELLoader.h"
 #include "AdvancedPreviewScene.h"
 #include "Components/PoseableMeshComponent.h"
 #include "Engine/SkeletalMesh.h"
@@ -204,11 +205,13 @@ UMaterial* SWowModelPreview::CreateUnlitMaterial(UTexture2D* Texture, uint16 Ble
 		}
 	}
 
+	bool bNeedsRecompile = false;
+	Mat->SetMaterialUsage(bNeedsRecompile, MATUSAGE_SkeletalMesh);
 	Mat->PostEditChange();
 	return Mat;
 }
 
-void SWowModelPreview::SetM2Model(const FWowM2ModelData& ModelData, M2Loader* InLoader)
+void SWowModelPreview::SetM2Model(const FWowM2ModelData& ModelData, M2Loader* InLoader, SKELLoader* InSkelLoader, SKELLoader* InParentSkelLoader)
 {
 	ClearModel();
 	CurrentModelData = ModelData;
@@ -216,7 +219,11 @@ void SWowModelPreview::SetM2Model(const FWowM2ModelData& ModelData, M2Loader* In
 	if (InLoader)
 	{
 		Animator = MakeShared<FWowM2Animator>();
-		Animator->Initialize(InLoader);
+		// Parent skel has structural bones, child skel overrides anims
+		if (InParentSkelLoader)
+			Animator->Initialize(InLoader, InParentSkelLoader, InSkelLoader);
+		else
+			Animator->Initialize(InLoader, InSkelLoader);
 	}
 
 	if (ModelData.Positions.Num() == 0 || ModelData.Triangles.Num() == 0)
@@ -255,7 +262,7 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 	const int32 NumTriIndices = MD.Triangles.Num();
 	const int32 TriCount = NumTriIndices / 3;
 	const int32 VertCount = MD.Positions.Num();
-	const int32 BoneCount = MD.Bones.Num();
+	int32 BoneCount = MD.Bones.Num();
 
 	// Resolve triangle indices
 	TArray<uint32> Resolved;
@@ -291,19 +298,57 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 			TriGroup[T] = NewIdx;
 	}
 
-	// === Build USkeleton ===
-	PreviewSkeleton = NewObject<USkeleton>(GetTransientPackage(), NAME_None, RF_Transient);
+	// === Build Reference Skeleton ===
+	// Models with 0 bones need a dummy root bone for skeletal mesh
+	if (BoneCount == 0)
 	{
-		FReferenceSkeletonModifier SkMod(PreviewSkeleton);
+		FWowBoneData DummyBone;
+		DummyBone.BoneName = FName(TEXT("Root"));
+		DummyBone.ParentIndex = -1;
+		DummyBone.BoneID = -1;
+		const_cast<FWowM2ModelData&>(MD).Bones.Add(DummyBone);
+		BoneCount = 1;
+	}
+
+	// Ensure unique bone names and valid parent indices
+	TSet<FName> UsedNames;
+	TArray<FName> BoneNames;
+	BoneNames.SetNum(BoneCount);
+	for (int32 i = 0; i < BoneCount; ++i)
+	{
+		FName BaseName = MD.Bones[i].BoneName;
+		if (BaseName == NAME_None)
+			BaseName = FName(*FString::Printf(TEXT("Bone_%d"), i));
+		FName UniqueName = BaseName;
+		int32 Suffix = 1;
+		while (UsedNames.Contains(UniqueName))
+			UniqueName = FName(*FString::Printf(TEXT("%s_%d"), *BaseName.ToString(), Suffix++));
+		UsedNames.Add(UniqueName);
+		BoneNames[i] = UniqueName;
+	}
+
+	FReferenceSkeleton RefSkeleton;
+	{
+		FReferenceSkeletonModifier SkMod(RefSkeleton, nullptr);
 		for (int32 i = 0; i < BoneCount; ++i)
 		{
-			const auto& B = MD.Bones[i];
 			FMeshBoneInfo Info;
-			Info.Name = B.BoneName;
-			Info.ParentIndex = B.ParentIndex;
+			Info.Name = BoneNames[i];
+			int32 ParentIdx = MD.Bones[i].ParentIndex;
+			if (ParentIdx >= 0 && ParentIdx < i)
+				Info.ParentIndex = ParentIdx;
+			else if (i == 0)
+				Info.ParentIndex = INDEX_NONE;
+			else
+				Info.ParentIndex = 0;
 			SkMod.Add(Info, FTransform::Identity, true);
 		}
 	}
+
+	UE_LOG(LogWowPreview, Log, TEXT("Built ref skeleton: %d bones requested, %d created"),
+		BoneCount, RefSkeleton.GetRawBoneNum());
+
+	PreviewSkeleton = NewObject<USkeleton>(GetTransientPackage(), NAME_None, RF_Transient);
 
 	// === Build FMeshDescription with skeletal attributes ===
 	FMeshDescription MeshDesc;
@@ -328,7 +373,8 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 		FVertexID VID = MeshDesc.CreateVertex();
 		Positions.Set(VID, MD.Positions[i]);
 
-		// Skin weights
+		// Skin weights — clamp to actual skeleton bone count
+		int32 ActualBoneCount = RefSkeleton.GetRawBoneNum();
 		TArray<UE::AnimationCore::FBoneWeight> BW;
 		if (MD.BoneWeights.Num() >= (i + 1) * 4 && MD.BoneIndices.Num() >= (i + 1) * 4)
 		{
@@ -336,7 +382,7 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 			{
 				uint8 BIdx = MD.BoneIndices[i * 4 + j];
 				uint8 BWt = MD.BoneWeights[i * 4 + j];
-				if (BWt > 0 && BIdx < BoneCount)
+				if (BWt > 0 && BIdx < ActualBoneCount)
 					BW.Add(UE::AnimationCore::FBoneWeight(BIdx, BWt / 255.f));
 			}
 		}
@@ -374,8 +420,7 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 
 	// === Build USkeletalMesh ===
 	PreviewMesh = NewObject<USkeletalMesh>(GetTransientPackage(), NAME_None, RF_Transient);
-	PreviewMesh->SetRefSkeleton(PreviewSkeleton->GetReferenceSkeleton());
-	PreviewMesh->CalculateInvRefMatrices();
+	PreviewMesh->SetRefSkeleton(RefSkeleton);
 
 	// Materials
 	TArray<FSkeletalMaterial> SkMaterials;
@@ -414,7 +459,7 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 
 	TArray<const FMeshDescription*> Descs = { &MeshDesc };
 	bool bBuilt = FStaticToSkeletalMeshConverter::InitializeSkeletalMeshFromMeshDescriptions(
-		PreviewMesh, Descs, SkMaterials, PreviewSkeleton->GetReferenceSkeleton(), false, true);
+		PreviewMesh, Descs, SkMaterials, RefSkeleton, false, true);
 
 	if (!bBuilt)
 	{
@@ -425,7 +470,7 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 	}
 
 	PreviewMesh->SetSkeleton(PreviewSkeleton);
-	PreviewSkeleton->RecreateBoneTree(PreviewMesh);
+	PreviewSkeleton->MergeAllBonesToBoneTree(PreviewMesh);
 
 	// === Create UPoseableMeshComponent ===
 	FRotator WowOrient(-90.f, 0.f, 0.f);

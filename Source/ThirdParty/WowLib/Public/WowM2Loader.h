@@ -13,6 +13,7 @@
 
 class BufferWrapper;
 class M2Loader;
+class SKELLoader;
 
 struct WOWLIB_API FWowSubMeshData
 {
@@ -87,7 +88,17 @@ struct WOWLIB_API FWowCreatureDisplay
 class WOWLIB_API FWowM2Loader
 {
 public:
-	static bool LoadM2(uint32 FileDataID, FWowM2ModelData& OutModel, TSharedPtr<BufferWrapper>& OutBuffer, TSharedPtr<M2Loader>& OutLoader, FString& OutError);
+	struct FM2LoadResult
+	{
+		TSharedPtr<BufferWrapper> M2Buffer;
+		TSharedPtr<M2Loader> Loader;
+		TSharedPtr<BufferWrapper> SkelBuffer;
+		TSharedPtr<SKELLoader> SkelLoader;
+		TSharedPtr<BufferWrapper> ParentSkelBuffer;
+		TSharedPtr<SKELLoader> ParentSkelLoader;
+	};
+
+	static bool LoadM2(uint32 FileDataID, FWowM2ModelData& OutModel, FM2LoadResult& OutResult, FString& OutError);
 	static bool ResolveCreatureTextures(FWowM2ModelData& Model, FString& OutError);
 	static bool GetCreatureDisplays(uint32 M2FileDataID, TArray<FWowCreatureDisplay>& OutDisplays, FString& OutError);
 };
