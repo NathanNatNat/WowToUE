@@ -66,7 +66,7 @@ private:
 	void UpdateBoneTransforms();
 	void TickAnimation(float DeltaSeconds);
 	UTexture2D* CreateTextureFromBLP(uint32 FileDataID, uint32 WrapFlags = 0);
-	UMaterial* CreateUnlitMaterial(UTexture2D* Texture, uint16 BlendMode = 0, uint16 MaterialFlags = 0x05, bool bNeedsAlphaControl = false);
+	UMaterial* CreateCombinerMaterial(const TArray<UTexture2D*>& Textures, int32 CombinerID, int32 VertexShaderID, uint16 BlendMode, uint16 MaterialFlags, bool bNeedsAlphaControl);
 
 	TSharedPtr<FAdvancedPreviewScene> PreviewScene;
 	TSharedPtr<FWowModelPreviewClient> ViewportClient;

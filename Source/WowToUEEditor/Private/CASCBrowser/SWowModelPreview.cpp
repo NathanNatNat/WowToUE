@@ -14,7 +14,10 @@
 #include "Materials/MaterialExpressionConstant.h"
 #include "Materials/MaterialExpressionTextureSample.h"
 #include "Materials/MaterialExpressionScalarParameter.h"
+#include "Materials/MaterialExpressionVectorParameter.h"
 #include "Materials/MaterialExpressionMultiply.h"
+#include "Materials/MaterialExpressionCustom.h"
+#include "Materials/MaterialExpressionAdd.h"
 #include "MeshDescription.h"
 #include "SkeletalMeshAttributes.h"
 #include "SkinWeightsAttributesRef.h"
@@ -167,7 +170,7 @@ UTexture2D* SWowModelPreview::CreateTextureFromBLP(uint32 FileDataID, uint32 Wra
 	return Tex;
 }
 
-UMaterial* SWowModelPreview::CreateUnlitMaterial(UTexture2D* Texture, uint16 BlendMode, uint16 MaterialFlags, bool bNeedsAlphaControl)
+UMaterial* SWowModelPreview::CreateCombinerMaterial(const TArray<UTexture2D*>& Textures, int32 CombinerID, int32 VertexShaderID, uint16 BlendMode, uint16 MaterialFlags, bool bNeedsAlphaControl)
 {
 	UMaterial* Mat = NewObject<UMaterial>(GetTransientPackage(), NAME_None, RF_Transient);
 	bool bUnlit = (MaterialFlags & 0x01) != 0;
@@ -186,81 +189,121 @@ UMaterial* SWowModelPreview::CreateUnlitMaterial(UTexture2D* Texture, uint16 Ble
 	default: Mat->BlendMode = BLEND_Opaque; break;
 	}
 
+	// Combiners with emissive additive output need translucent or additive to show the glow
+	bool bHasEmissive = (CombinerID == 8 || CombinerID == 10 || CombinerID == 13 ||
+		CombinerID == 14 || CombinerID == 16 || CombinerID == 17 || CombinerID == 21);
+	if (bHasEmissive && BlendMode == 0)
+		Mat->BlendMode = BLEND_Opaque;
+
 	Mat->bUsedWithSkeletalMesh = true;
 
-	// MeshAlpha parameter — driven by MID for animated submesh visibility
-	UMaterialExpressionScalarParameter* AlphaParam = nullptr;
-	if (bNeedsAlphaControl)
+	// Texture samplers (up to 4)
+	TArray<UMaterialExpressionTextureSample*> TexNodes;
+	for (int32 i = 0; i < FMath::Min(Textures.Num(), 4); ++i)
 	{
-		AlphaParam = NewObject<UMaterialExpressionScalarParameter>(Mat);
-		AlphaParam->ParameterName = TEXT("MeshAlpha");
-		AlphaParam->DefaultValue = 1.f;
-		Mat->GetExpressionCollection().AddExpression(AlphaParam);
-	}
-
-	if (Texture)
-	{
+		if (!Textures[i]) continue;
 		auto* TexNode = NewObject<UMaterialExpressionTextureSample>(Mat);
-		TexNode->Texture = Texture;
+		TexNode->Texture = Textures[i];
 		TexNode->SamplerType = SAMPLERTYPE_Color;
+		if (i >= 1)
+			TexNode->ConstCoordinate = 1;
 		Mat->GetExpressionCollection().AddExpression(TexNode);
-
-		if (AlphaParam)
-		{
-			auto* ColorMul = NewObject<UMaterialExpressionMultiply>(Mat);
-			ColorMul->A.Expression = TexNode;
-			ColorMul->B.Expression = AlphaParam;
-			Mat->GetExpressionCollection().AddExpression(ColorMul);
-			if (bUnlit) Mat->GetEditorOnlyData()->EmissiveColor.Expression = ColorMul;
-			else Mat->GetEditorOnlyData()->BaseColor.Expression = ColorMul;
-		}
-		else
-		{
-			if (bUnlit) Mat->GetEditorOnlyData()->EmissiveColor.Expression = TexNode;
-			else Mat->GetEditorOnlyData()->BaseColor.Expression = TexNode;
-		}
-
-		if (BlendMode == 1)
-		{
-			if (AlphaParam)
-			{
-				auto* Multiply = NewObject<UMaterialExpressionMultiply>(Mat);
-				Multiply->A.Expression = TexNode;
-				Multiply->A.OutputIndex = 4;
-				Multiply->B.Expression = AlphaParam;
-				Mat->GetExpressionCollection().AddExpression(Multiply);
-				Mat->GetEditorOnlyData()->OpacityMask.Expression = Multiply;
-			}
-			else
-			{
-				Mat->GetEditorOnlyData()->OpacityMask.Expression = TexNode;
-				Mat->GetEditorOnlyData()->OpacityMask.OutputIndex = 4;
-			}
-		}
-		else if (BlendMode >= 2 && Mat->BlendMode != BLEND_Modulate)
-		{
-			if (AlphaParam)
-			{
-				auto* Multiply = NewObject<UMaterialExpressionMultiply>(Mat);
-				Multiply->A.Expression = TexNode;
-				Multiply->A.OutputIndex = 4;
-				Multiply->B.Expression = AlphaParam;
-				Mat->GetExpressionCollection().AddExpression(Multiply);
-				Mat->GetEditorOnlyData()->Opacity.Expression = Multiply;
-			}
-			else
-			{
-				Mat->GetEditorOnlyData()->Opacity.Expression = TexNode;
-				Mat->GetEditorOnlyData()->Opacity.OutputIndex = 4;
-			}
-		}
+		TexNodes.Add(TexNode);
 	}
-	else if (AlphaParam)
+
+	// MeshColor and MeshAlpha parameters
+	auto* ColorParam = NewObject<UMaterialExpressionVectorParameter>(Mat);
+	ColorParam->ParameterName = TEXT("MeshColor");
+	ColorParam->DefaultValue = FLinearColor::White;
+	Mat->GetExpressionCollection().AddExpression(ColorParam);
+
+	auto* AlphaParam = NewObject<UMaterialExpressionScalarParameter>(Mat);
+	AlphaParam->ParameterName = TEXT("MeshAlpha");
+	AlphaParam->DefaultValue = 1.f;
+	Mat->GetExpressionCollection().AddExpression(AlphaParam);
+
+	// Custom HLSL combiner node
+	auto* CustomNode = NewObject<UMaterialExpressionCustom>(Mat);
+	CustomNode->OutputType = CMOT_Float4;
+	CustomNode->Description = TEXT("M2Combiner");
+
+	// Create constant white for missing texture slots
+	auto* WhiteConst = NewObject<UMaterialExpressionConstant>(Mat);
+	WhiteConst->R = 1.f;
+	Mat->GetExpressionCollection().AddExpression(WhiteConst);
+
+	// Inputs: tex1 RGB, tex1 alpha, tex2 RGB, tex2 alpha, meshColor, meshAlpha
+	CustomNode->Inputs.Empty();
+	CustomNode->Inputs.SetNum(6);
+
+	CustomNode->Inputs[0].InputName = TEXT("Tex1");
+	CustomNode->Inputs[0].Input.Expression = (TexNodes.Num() > 0) ? static_cast<UMaterialExpression*>(TexNodes[0]) : WhiteConst;
+
+	CustomNode->Inputs[1].InputName = TEXT("Tex1A");
+	if (TexNodes.Num() > 0) { CustomNode->Inputs[1].Input.Expression = TexNodes[0]; CustomNode->Inputs[1].Input.OutputIndex = 4; }
+	else { CustomNode->Inputs[1].Input.Expression = WhiteConst; }
+
+	CustomNode->Inputs[2].InputName = TEXT("Tex2");
+	CustomNode->Inputs[2].Input.Expression = (TexNodes.Num() > 1) ? static_cast<UMaterialExpression*>(TexNodes[1]) : WhiteConst;
+
+	CustomNode->Inputs[3].InputName = TEXT("Tex2A");
+	if (TexNodes.Num() > 1) { CustomNode->Inputs[3].Input.Expression = TexNodes[1]; CustomNode->Inputs[3].Input.OutputIndex = 4; }
+	else { CustomNode->Inputs[3].Input.Expression = WhiteConst; }
+
+	CustomNode->Inputs[4].InputName = TEXT("MC");
+	CustomNode->Inputs[4].Input.Expression = ColorParam;
+
+	CustomNode->Inputs[5].InputName = TEXT("MA");
+	CustomNode->Inputs[5].Input.Expression = AlphaParam;
+
+	// HLSL combiner — outputs float4(combined color, alpha)
+	CustomNode->Code = FString::Printf(TEXT(
+		"float3 t1 = Tex1;\n"
+		"float t1a = Tex1A;\n"
+		"float3 t2 = Tex2;\n"
+		"float t2a = Tex2A;\n"
+		"float3 mc = MC;\n"
+		"float ma = MA;\n"
+		"float3 diff = mc * t1;\n"
+		"float3 spec = float3(0,0,0);\n"
+		"float da = 1.0;\n"
+		"\n"
+		"int c = %d;\n"
+		"if (c == 0) { diff = mc * t1; da = 1.0; }\n"
+		"else if (c == 1) { diff = mc * t1; da = t1a; }\n"
+		"else if (c == 2) { diff = mc * t1 * t2; da = t2a; }\n"
+		"else if (c == 3) { diff = mc * t1 * t2 * 2.0; da = saturate(t2a * 2.0); }\n"
+		"else if (c == 4) { diff = mc * t1 * t2 * 2.0; da = 1.0; }\n"
+		"else if (c == 5) { diff = mc * t1 * t2; da = 1.0; }\n"
+		"else if (c == 6) { diff = mc * t1 * t2; da = t1a * t2a; }\n"
+		"else if (c == 7) { diff = mc * t1 * t2 * 2.0; da = saturate(t1a * t2a * 2.0); }\n"
+		"else if (c == 8) { diff = mc * t1; spec = t2; da = saturate(t1a + t2a); }\n"
+		"else if (c == 9) { diff = mc * t1 * t2 * 2.0; da = t1a; }\n"
+		"else if (c == 10) { diff = mc * t1; spec = t2; da = t1a; }\n"
+		"else if (c == 11) { diff = mc * t1 * t2; da = t1a; }\n"
+		"else if (c == 12) { diff = mc * lerp(t1 * t2 * 2.0, t1, t1a); da = 1.0; }\n"
+		"else if (c == 13) { diff = mc * t1; spec = t2 * t2a; da = 1.0; }\n"
+		"else if (c == 14) { diff = mc * t1; spec = t2 * t2a * (1.0 - t1a); da = 1.0; }\n"
+		"\n"
+		"da = saturate(da * ma);\n"
+		"return float4(diff + spec, da);\n"
+	), CombinerID);
+
+	Mat->GetExpressionCollection().AddExpression(CustomNode);
+
+	// Route: combined color → EmissiveColor (unlit-style for now), alpha → opacity
+	Mat->GetEditorOnlyData()->EmissiveColor.Expression = CustomNode;
+	Mat->SetShadingModel(MSM_Unlit);
+
+	if (Mat->BlendMode == BLEND_Masked)
 	{
-		if (Mat->BlendMode == BLEND_Masked)
-			Mat->GetEditorOnlyData()->OpacityMask.Expression = AlphaParam;
-		else if (Mat->BlendMode != BLEND_Opaque && Mat->BlendMode != BLEND_Modulate)
-			Mat->GetEditorOnlyData()->Opacity.Expression = AlphaParam;
+		Mat->GetEditorOnlyData()->OpacityMask.Expression = CustomNode;
+		Mat->GetEditorOnlyData()->OpacityMask.OutputIndex = 4;
+	}
+	else if (Mat->BlendMode == BLEND_Translucent || Mat->BlendMode == BLEND_Additive)
+	{
+		Mat->GetEditorOnlyData()->Opacity.Expression = CustomNode;
+		Mat->GetEditorOnlyData()->Opacity.OutputIndex = 4;
 	}
 
 	Mat->PostEditChange();
@@ -444,6 +487,7 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 	FMeshDescription MeshDesc;
 	FSkeletalMeshAttributes SkAttrs(MeshDesc);
 	SkAttrs.Register();
+	SkAttrs.GetVertexInstanceUVs().SetNumChannels(MD.UV2s.Num() > 0 ? 2 : 1);
 
 	TArray<FPolygonGroupID> PolyGroups;
 	for (int32 i = 0; i < VisibleSubmeshIndices.Num(); ++i)
@@ -503,6 +547,8 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 				InstNormals[VIID] = MD.Normals[VI];
 			if (static_cast<int32>(VI) < MD.UVs.Num())
 				InstUVs.Set(VIID, 0, MD.UVs[VI]);
+			if (static_cast<int32>(VI) < MD.UV2s.Num())
+				InstUVs.Set(VIID, 1, MD.UV2s[VI]);
 		}
 
 		MeshDesc.CreateTriangle(PolyGroups[TriGroup[Tri]], Corners);
@@ -525,23 +571,27 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 	for (int32 NewIdx = 0; NewIdx < VisibleSubmeshIndices.Num(); ++NewIdx)
 	{
 		int32 OldIdx = VisibleSubmeshIndices[NewIdx];
-		UTexture2D* TexForSlot = nullptr;
-		if (OldIdx < MD.SubMeshes.Num())
+		const auto& Sub = MD.SubMeshes[OldIdx];
+
+		// Resolve up to TextureCount textures via TextureCombos
+		TArray<UTexture2D*> TexSlots;
+		for (int32 t = 0; t < FMath::Min(static_cast<int32>(Sub.TextureCount), 4); ++t)
 		{
-			uint16 ComboIdx = MD.SubMeshes[OldIdx].TextureComboIndex;
+			UTexture2D* Tex = nullptr;
+			uint16 ComboIdx = Sub.TextureComboIndex + t;
 			if (ComboIdx < MD.TextureCombos.Num())
 			{
 				uint16 TexIdx = MD.TextureCombos[ComboIdx];
 				if (TexIdx < LoadedTextures.Num())
-					TexForSlot = LoadedTextures[TexIdx];
+					Tex = LoadedTextures[TexIdx];
 			}
+			TexSlots.Add(Tex);
 		}
 
-		const auto& Sub = MD.SubMeshes[OldIdx];
 		bool bNeedsAlpha = (Sub.ColorIndex >= 0 || Sub.TexWeightIndex >= 0);
 		UMaterialInterface* Mat;
-		if (TexForSlot)
-			Mat = CreateUnlitMaterial(TexForSlot, Sub.BlendMode, Sub.MaterialFlags, bNeedsAlpha);
+		if (TexSlots.Num() > 0 && TexSlots[0])
+			Mat = CreateCombinerMaterial(TexSlots, Sub.PixelShaderID, Sub.VertexShaderID, Sub.BlendMode, Sub.MaterialFlags, bNeedsAlpha);
 		else
 			Mat = UMaterial::GetDefaultMaterial(MD_Surface);
 

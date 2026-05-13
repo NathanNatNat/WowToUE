@@ -21,10 +21,15 @@ struct WOWLIB_API FWowSubMeshData
 	uint32 TriangleStart;
 	uint16 TriangleCount;
 	uint16 TextureComboIndex;
-	uint16 BlendMode = 0;    // 0=Opaque, 1=AlphaKey, 2=Alpha, 3=NoAlphaAdd, 4=Add, 5=Mod, 6=Mod2x, 7=BlendAdd
-	uint16 MaterialFlags = 0; // 0x01=unlit, 0x04=no cull, 0x08=no depth test, 0x10=no depth write
+	uint16 TextureCount = 1;   // Number of textures for this submesh (1-4)
+	uint16 BlendMode = 0;      // 0=Opaque, 1=AlphaKey, 2=Alpha, 3=NoAlphaAdd, 4=Add, 5=Mod, 6=Mod2x, 7=BlendAdd
+	uint16 MaterialFlags = 0;  // 0x01=unlit, 0x04=no cull, 0x08=no depth test, 0x10=no depth write
+	int32 PixelShaderID = 0;   // Resolved combiner case (0-36)
+	int32 VertexShaderID = 0;  // Resolved vertex shader mode (0-18)
 	int32 ColorIndex = -1;     // Index into M2 colors array (-1 = none)
 	int32 TexWeightIndex = -1; // Resolved index into M2 textureWeights array (-1 = none)
+	int32 TexTransformIndex0 = -1; // Texture transform for tex1 (-1 = none)
+	int32 TexTransformIndex1 = -1; // Texture transform for tex2 (-1 = none)
 };
 
 struct WOWLIB_API FWowTextureRef

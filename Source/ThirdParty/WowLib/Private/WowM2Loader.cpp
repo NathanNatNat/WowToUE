@@ -10,8 +10,50 @@
 #include "3D/Texture.h"
 #include "3D/BoneMapper.h"
 #include "3D/AnimMapper.h"
+#include "3D/ShaderMapper.h"
 #include "db/caches/DBCreatures.h"
 #include "casc/listfile.h"
+
+static int32 MapPixelShaderName(const FString& Name)
+{
+	static const TMap<FString, int32> Map = {
+		{TEXT("Combiners_Opaque"), 0}, {TEXT("Combiners_Mod"), 1},
+		{TEXT("Combiners_Opaque_Mod"), 2}, {TEXT("Combiners_Opaque_Mod2x"), 3},
+		{TEXT("Combiners_Opaque_Mod2xNA"), 4}, {TEXT("Combiners_Opaque_Opaque"), 5},
+		{TEXT("Combiners_Mod_Mod"), 6}, {TEXT("Combiners_Mod_Mod2x"), 7},
+		{TEXT("Combiners_Mod_Add"), 8}, {TEXT("Combiners_Mod_Mod2xNA"), 9},
+		{TEXT("Combiners_Mod_AddNA"), 10}, {TEXT("Combiners_Mod_Opaque"), 11},
+		{TEXT("Combiners_Opaque_Mod2xNA_Alpha"), 12}, {TEXT("Combiners_Opaque_AddAlpha"), 13},
+		{TEXT("Combiners_Opaque_AddAlpha_Alpha"), 14}, {TEXT("Combiners_Opaque_Mod2xNA_Alpha_Add"), 15},
+		{TEXT("Combiners_Mod_AddAlpha"), 16}, {TEXT("Combiners_Mod_AddAlpha_Alpha"), 17},
+		{TEXT("Combiners_Opaque_Alpha_Alpha"), 18}, {TEXT("Combiners_Opaque_Mod2xNA_Alpha_3s"), 19},
+		{TEXT("Combiners_Opaque_AddAlpha_Wgt"), 20}, {TEXT("Combiners_Mod_Add_Alpha"), 21},
+		{TEXT("Combiners_Opaque_ModNA_Alpha"), 22}, {TEXT("Combiners_Mod_AddAlpha_Wgt"), 23},
+		{TEXT("Combiners_Opaque_Mod_Add_Wgt"), 24}, {TEXT("Combiners_Opaque_Mod2xNA_Alpha_UnshAlpha"), 25},
+		{TEXT("Combiners_Mod_Dual_Crossfade"), 26}, {TEXT("Combiners_Opaque_Mod2xNA_Alpha_Alpha"), 27},
+		{TEXT("Combiners_Mod_Masked_Dual_Crossfade"), 28}, {TEXT("Combiners_Opaque_Alpha"), 29},
+		{TEXT("Guild"), 30}, {TEXT("Guild_NoBorder"), 31}, {TEXT("Guild_Opaque"), 32},
+		{TEXT("Combiners_Mod_Depth"), 33}, {TEXT("Illum"), 34},
+		{TEXT("Combiners_Mod_Mod_Mod_Const"), 35}, {TEXT("Combiners_Mod_Mod_Depth"), 36},
+	};
+	const int32* Found = Map.Find(Name);
+	return Found ? *Found : 0;
+}
+
+static int32 MapVertexShaderName(const FString& Name)
+{
+	static const TMap<FString, int32> Map = {
+		{TEXT("Diffuse_T1"), 0}, {TEXT("Diffuse_Env"), 1}, {TEXT("Diffuse_T1_T2"), 2},
+		{TEXT("Diffuse_T1_Env"), 3}, {TEXT("Diffuse_Env_T1"), 4}, {TEXT("Diffuse_Env_Env"), 5},
+		{TEXT("Diffuse_T1_Env_T1"), 6}, {TEXT("Diffuse_T1_T1"), 7}, {TEXT("Diffuse_T1_T1_T1"), 8},
+		{TEXT("Diffuse_EdgeFade_T1"), 9}, {TEXT("Diffuse_T2"), 10}, {TEXT("Diffuse_T1_Env_T2"), 11},
+		{TEXT("Diffuse_EdgeFade_T1_T2"), 12}, {TEXT("Diffuse_EdgeFade_Env"), 13},
+		{TEXT("Diffuse_T1_T2_T1"), 14}, {TEXT("Diffuse_T1_T2_T3"), 15},
+		{TEXT("Color_T1_T2_T3"), 16}, {TEXT("BW_Diffuse_T1"), 17}, {TEXT("BW_Diffuse_T1_T2"), 18},
+	};
+	const int32* Found = Map.Find(Name);
+	return Found ? *Found : 0;
+}
 
 DEFINE_LOG_CATEGORY_STATIC(LogWowM2, Log, All);
 
@@ -225,7 +267,7 @@ bool FWowM2Loader::LoadM2(uint32 FileDataID, FWowM2ModelData& OutModel, FM2LoadR
 				OutModel.SubMeshes.Add(Sub);
 			}
 
-			// Match first textureUnit per submesh (same as wow.export.cpp line 675-679)
+			// Match first textureUnit per submesh and extract all shader/texture data
 			for (const auto& TU : SkinData->textureUnits)
 			{
 				if (TU.skinSectionIndex < OutModel.SubMeshes.Num())
@@ -235,6 +277,7 @@ bool FWowM2Loader::LoadM2(uint32 FileDataID, FWowM2ModelData& OutModel, FM2LoadR
 						continue;
 
 					Sub.TextureComboIndex = TU.textureComboIndex;
+					Sub.TextureCount = FMath::Max<uint16>(TU.textureCount, 1);
 
 					if (TU.materialIndex < Loader.materials.size())
 					{
@@ -242,6 +285,15 @@ bool FWowM2Loader::LoadM2(uint32 FileDataID, FWowM2ModelData& OutModel, FM2LoadR
 						Sub.BlendMode = Mat.blendingMode;
 						Sub.MaterialFlags = Mat.flags;
 					}
+
+					// Resolve pixel/vertex shader IDs
+					auto PS = shader_mapper::getPixelShader(TU.textureCount, TU.shaderID);
+					if (PS.has_value())
+						Sub.PixelShaderID = MapPixelShaderName(FString(UTF8_TO_TCHAR(PS->c_str())));
+
+					auto VS = shader_mapper::getVertexShader(TU.textureCount, TU.shaderID);
+					if (VS.has_value())
+						Sub.VertexShaderID = MapVertexShaderName(FString(UTF8_TO_TCHAR(VS->c_str())));
 
 					if (TU.colorIndex < static_cast<uint16_t>(Loader.colors.size()))
 						Sub.ColorIndex = TU.colorIndex;
@@ -251,6 +303,20 @@ bool FWowM2Loader::LoadM2(uint32 FileDataID, FWowM2ModelData& OutModel, FM2LoadR
 						uint16_t Idx = Loader.transparencyLookup[TU.textureWeightComboIndex];
 						if (Idx < static_cast<uint16_t>(Loader.textureWeights.size()))
 							Sub.TexWeightIndex = Idx;
+					}
+
+					// Resolve texture transform indices
+					if (TU.textureTransformComboIndex < static_cast<uint16_t>(Loader.textureTransformsLookup.size()))
+					{
+						int16_t Idx = Loader.textureTransformsLookup[TU.textureTransformComboIndex];
+						if (Idx >= 0 && Idx < static_cast<int16_t>(Loader.textureTransforms.size()))
+							Sub.TexTransformIndex0 = Idx;
+					}
+					if (TU.textureTransformComboIndex + 1 < static_cast<uint16_t>(Loader.textureTransformsLookup.size()))
+					{
+						int16_t Idx = Loader.textureTransformsLookup[TU.textureTransformComboIndex + 1];
+						if (Idx >= 0 && Idx < static_cast<int16_t>(Loader.textureTransforms.size()))
+							Sub.TexTransformIndex1 = Idx;
 					}
 				}
 			}
