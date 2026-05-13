@@ -520,35 +520,40 @@ void FWowM2Animator::CalcAllBones()
 			Mat4Copy(CompMat, local_mat);
 		}
 
+		// Convert local_mat (WowLib column-major) to UE FTransform
+		// Formula: UE_row[r][c] = WL_colmaj[P[r]*4 + P[c]] for 3x3 rotation block
+		// where P={2,0,1} maps WL axes {x,y,z} → UE axes {z,x,y}
+		{
+			static const int32 P[3] = { 2, 0, 1 };
+			FMatrix UE_Local = FMatrix::Identity;
+			for (int32 r = 0; r < 3; ++r)
+				for (int32 c = 0; c < 3; ++c)
+					UE_Local.M[r][c] = local_mat[P[r] * 4 + P[c]];
+
+			FVector UE_Trans = WowLibToUE_Translation(local_mat[12], local_mat[13], local_mat[14]);
+			UE_Local.M[3][0] = UE_Trans.X;
+			UE_Local.M[3][1] = UE_Trans.Y;
+			UE_Local.M[3][2] = UE_Trans.Z;
+
+			BoneLocalTransforms[Idx] = FTransform(UE_Local);
+		}
+
 		BoneCalculated[Idx] = true;
 	};
 
 	for (int32 i = 0; i < BoneCount; ++i)
 		CalcBone(i);
 
-	// Convert WowLib column-major component matrices to UE component-space FTransforms
-	// These are set directly via SetBoneTransformByName with EBoneSpaces::ComponentSpace
-	for (int32 i = 0; i < BoneCount; ++i)
+	// Debug: log raw WowLib bone matrices for comparison with wow.export
+	static bool bLoggedWL = false;
+	if (!bLoggedWL && AnimIdx >= 0)
 	{
-		const float* WL = &BoneMatrices[i * 16];
-
-		// Column-major WL translation is in column 3
-		FVector WL_Trans(WL[12], WL[13], WL[14]);
-		FVector UE_Trans = WowLibToUE_Translation(WL_Trans.X, WL_Trans.Y, WL_Trans.Z);
-
-		// Build UE rotation: similarity transform Conv * M_wl^T * Conv^-1
-		// Conv permutation: WL{x,y,z} → UE{z,x,y} (indices: 2,0,1)
-		// M_wl^T because column-major→row-major transpose
-		FMatrix UE_Mat = FMatrix::Identity;
-		static const int32 P[3] = { 2, 0, 1 };
-		for (int32 r = 0; r < 3; ++r)
-			for (int32 c = 0; c < 3; ++c)
-				UE_Mat.M[r][c] = WL[P[r] * 4 + P[c]];
-
-		UE_Mat.M[3][0] = UE_Trans.X;
-		UE_Mat.M[3][1] = UE_Trans.Y;
-		UE_Mat.M[3][2] = UE_Trans.Z;
-
-		BoneLocalTransforms[i] = FTransform(UE_Mat);
+		for (int32 i = 0; i < FMath::Min(5, BoneCount); ++i)
+		{
+			const float* M = &BoneMatrices[i * 16];
+			UE_LOG(LogTemp, Log, TEXT("WL Bone[%d]: pos=[%.4f,%.4f,%.4f] rot00=%.4f rot01=%.4f rot10=%.4f rot11=%.4f"),
+				i, M[12], M[13], M[14], M[0], M[1], M[4], M[5]);
+		}
+		bLoggedWL = true;
 	}
 }

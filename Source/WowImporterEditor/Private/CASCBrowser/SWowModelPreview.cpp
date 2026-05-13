@@ -510,15 +510,10 @@ void SWowModelPreview::UpdateBoneTransforms()
 	const auto& Transforms = Animator->GetBoneLocalTransforms();
 	const int32 NumBones = FMath::Min(Transforms.Num(), MeshComponent->GetNumBones());
 
-	for (int32 i = 0; i < NumBones && i < CurrentModelData.Bones.Num(); ++i)
-	{
-		MeshComponent->SetBoneTransformByName(
-			CurrentModelData.Bones[i].BoneName,
-			Transforms[i],
-			EBoneSpaces::ComponentSpace);
-	}
+	for (int32 i = 0; i < NumBones; ++i)
+		MeshComponent->BoneSpaceTransforms[i] = Transforms[i];
 
-	MeshComponent->MarkRefreshTransformDirty();
+	MeshComponent->RefreshBoneTransforms();
 }
 
 void SWowModelPreview::DrawBones(FPrimitiveDrawInterface* PDI)
