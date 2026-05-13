@@ -28,8 +28,11 @@ public:
 	void StepFrame(int32 Delta);
 
 	bool bPaused = false;
+	bool bCloseRightHand = false;
+	bool bCloseLeftHand = false;
 
 	const TArray<FTransform>& GetBoneLocalTransforms() const { return BoneLocalTransforms; }
+	bool IsPlaying() const { return bIsPlaying; }
 
 private:
 	void CalcAllBones();
@@ -38,15 +41,18 @@ private:
 	FQuat SampleQuat(int32 BoneIndex, int32 AnimIdx, float TimeMs);
 
 	M2Loader* Loader = nullptr;
-	SKELLoader* SkelLoader = nullptr;      // Parent/main skeleton (structural bones)
-	SKELLoader* ChildSkelLoader = nullptr;  // Child skeleton (animation overrides)
-	SKELLoader* CurrentAnimSource = nullptr; // Which SKEL provides current animation tracks
+	SKELLoader* SkelLoader = nullptr;
+	SKELLoader* ChildSkelLoader = nullptr;
+	SKELLoader* CurrentAnimSource = nullptr;
 
-	int32 CurrentAnimIndex = -1;
+	int32 CurrentAnimation = -1;   // Original requested animation index
+	int32 CurrentAnimIndex = -1;   // Resolved index in the animation source
 	float AnimationTime = 0.f;
 	int32 HandsClosedAnimIndex = -1;
+	bool bIsPlaying = false;
 
 	int32 BoneCount = 0;
+	TArray<float> GlobalSeqTimes;
 	TArray<FTransform> BoneLocalTransforms;
 	TArray<bool> BoneCalculated;
 };

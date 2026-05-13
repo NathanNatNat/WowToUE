@@ -70,5 +70,4 @@ private:
 	FWowM2ModelData CurrentModelData;
 
 	TSharedPtr<FWowM2Animator> Animator;
-	bool bAnimationPlaying = false;
 };

@@ -73,7 +73,6 @@ void SWowModelPreview::ClearModel()
 	CurrentModelData = FWowM2ModelData();
 	TextureCache.Empty();
 	Animator.Reset();
-	bAnimationPlaying = false;
 }
 
 DEFINE_LOG_CATEGORY_STATIC(LogWowPreview, Log, All);
@@ -578,7 +577,7 @@ void SWowModelPreview::ApplyCreatureDisplay(const FWowCreatureDisplay& Display)
 
 void SWowModelPreview::TickAnimation(float DeltaSeconds)
 {
-	if (!Animator || !bAnimationPlaying || Animator->bPaused) return;
+	if (!Animator || !Animator->IsPlaying() || Animator->bPaused) return;
 	Animator->Update(DeltaSeconds);
 	UpdateBoneTransforms();
 }
@@ -586,7 +585,6 @@ void SWowModelPreview::TickAnimation(float DeltaSeconds)
 void SWowModelPreview::PlayAnimation(int32 AnimIndex)
 {
 	if (!Animator) return;
-	bAnimationPlaying = true;
 	Animator->PlayAnimation(AnimIndex);
 	UpdateBoneTransforms();
 }
@@ -594,7 +592,6 @@ void SWowModelPreview::PlayAnimation(int32 AnimIndex)
 void SWowModelPreview::StopAnimation()
 {
 	if (!Animator) return;
-	bAnimationPlaying = false;
 	Animator->StopAnimation();
 	UpdateBoneTransforms();
 }
