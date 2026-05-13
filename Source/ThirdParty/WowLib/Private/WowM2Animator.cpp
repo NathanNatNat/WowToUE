@@ -214,20 +214,20 @@ void FWowM2Animator::StepFrame(int32 Delta)
 	SetFrame(Frame);
 }
 
-// WowLib space {x, y, z} → UE space: cyclic permutation {z*100, x*100, y*100}
+// WowLib space → UE space: must match vertex conversion (-wy, wx, wz) in WowM2Loader.cpp
 static FVector WowLibToUE_Translation(float x, float y, float z)
 {
-	return FVector(z * 100.0, x * 100.0, y * 100.0);
+	return FVector(-y * 100.0, x * 100.0, z * 100.0);
 }
 
 static FQuat WowLibToUE_Rotation(float qx, float qy, float qz, float qw)
 {
-	return FQuat(qz, qx, qy, qw);
+	return FQuat(-qy, qx, qz, qw);
 }
 
 static FVector WowLibToUE_Scale(float sx, float sy, float sz)
 {
-	return FVector(sz, sx, sy);
+	return FVector(sy, sx, sz);
 }
 
 static int32 FindKeyframe(const std::vector<M2Value>& Timestamps, float TimeMs)

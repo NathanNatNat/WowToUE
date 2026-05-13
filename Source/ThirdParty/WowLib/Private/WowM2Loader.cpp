@@ -295,7 +295,7 @@ bool FWowM2Loader::LoadM2(uint32 FileDataID, FWowM2ModelData& OutModel, FM2LoadR
 				Bone.ParentIndex = B.parentBone;
 				Bone.BoneID = B.boneID;
 				if (B.pivot.size() >= 3)
-					Bone.Pivot = FVector3f(B.pivot[2] * 100.f, B.pivot[0] * 100.f, B.pivot[1] * 100.f);
+					Bone.Pivot = FVector3f(-B.pivot[1] * 100.f, B.pivot[0] * 100.f, B.pivot[2] * 100.f);
 				OutModel.Bones.Add(Bone);
 			}
 		};
