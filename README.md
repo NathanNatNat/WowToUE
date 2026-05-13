@@ -1,41 +1,29 @@
 # WowToUE
 
-An Unreal Engine 5.7 editor plugin that imports World of Warcraft game assets directly into UE. Browse and preview M2 models, creatures, textures, and more from a local WoW installation — no manual export step required.
+An Unreal Engine 5.7 editor plugin for browsing and previewing World of Warcraft game assets from a local WoW installation.
 
-## What It Does
+## Current Features
 
-WowToUE reads WoW's CASC archive system directly and converts assets into UE-native formats in real time:
-
-- **CASC Browser** — Browse all 1.8M+ files in a local WoW installation across 15 categorised tabs (Models, Textures, Characters, Creatures, Items, Decor, Audio, Maps, Zones, and more)
-- **M2 Model Preview** — Full 3D preview with skeletal mesh, GPU skinning, and animation playback
-- **Animation System** — Play, pause, step, and scrub through all 400+ animations per model
+- **CASC Browser** — Browse 1.8M+ files from a local WoW install across 15 categorised tabs
+- **M2 Model Preview** — 3D viewport with skeletal mesh, GPU skinning, and animation playback
+- **Animation** — Play, pause, step, and scrub through animations with dropdown selection
 - **Creature Display** — Resolve creature textures and geoset overrides from DB2 tables
-- **Geoset Control** — Toggle individual mesh sections (armor pieces, hair, facial features)
-- **BLP Textures** — Decode and preview WoW's BLP texture format
-- **Skeleton Visualisation** — UE-style wireframe bone rendering with full bone hierarchy list
-- **Direct Import** — Import assets as native UE skeletal meshes, textures, and materials
+- **Geoset Control** — Toggle individual mesh sections (armor, hair, facial features)
+- **BLP Textures** — Decode and display WoW's BLP texture format
+- **Skeleton Visualisation** — UE-style wireframe bone rendering with bone hierarchy list
+- **M3 Models** — Load and preview M3 format models
+
+See [PROGRESS.md](PROGRESS.md) for detailed status and planned work.
 
 ## Architecture
 
-The plugin has three modules:
-
 | Module | Purpose |
 |--------|---------|
-| **WowLib** | C++ port of wow.export's core: CASC access, M2/SKEL/M3/WMO/ADT loaders, DB2 parsing, BLP decoding |
+| **WowLib** | C++ port of wow.export's core: CASC access, M2/SKEL/M3 loaders, DB2 parsing, BLP decoding |
 | **WowToUERuntime** | UE bridge layer: coordinate conversion, model data structures |
-| **WowToUEEditor** | Editor UI: CASC browser, 3D preview viewport, asset factories |
+| **WowToUEEditor** | Editor UI: CASC browser, 3D preview viewport |
 
-### Coordinate Conversion
-
-WoW (right-handed Z-up) to UE (left-handed Z-up) is a direct single-step conversion with no intermediate coordinate system:
-
-```
-Position:  (X, -Y, Z) * 100
-Rotation:  (-qX, qY, -qZ, qW)
-Scale:     (sX, sY, sZ)
-```
-
-See [Docs/CoordinateConversion.md](Docs/CoordinateConversion.md) for full derivations and sample code.
+See [Docs/CoordinateConversion.md](Docs/CoordinateConversion.md) for the WoW-to-UE coordinate transform reference.
 
 ## Inspired By
 
@@ -47,8 +35,6 @@ This project is built on the foundation of [wow.export](https://github.com/Kruit
 - **[Marlamin](https://github.com/Marlamin)** — Major contributor to wow.export, creator of [wow.tools](https://wow.tools), and tireless reverse-engineer of WoW's file formats. Also maintains many of the community data resources this project depends on.
 
 ## Community Resources
-
-WowToUE relies on several community-maintained resources for WoW file format knowledge and runtime data:
 
 | Resource | Purpose |
 |----------|---------|
