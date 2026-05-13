@@ -60,23 +60,46 @@ void FWowM2Animator::PlayAnimation(int32 AnimIndex)
 {
 	if (!Loader) return;
 
-	int32 AnimCount = GetAnimCount(Loader, SkelLoader);
-	if (AnimIndex >= 0 && AnimIndex < AnimCount)
+	// Determine animation source — child SKEL overrides matching animations (wow.export playAnimation)
+	CurrentAnimSource = SkelLoader;
+	int32 ResolvedIndex = AnimIndex;
+
+	if (ChildSkelLoader && SkelLoader)
 	{
-		// Load external .anim data if needed
-		if (SkelLoader)
-			SkelLoader->loadAnimsForIndex(AnimIndex);
-		else
-			Loader->loadAnimsForIndex(AnimIndex).get();
+		// Check if child has this animation by matching ID and variation
+		int32 AnimCount = static_cast<int32>(SkelLoader->animations.size());
+		if (AnimIndex >= 0 && AnimIndex < AnimCount)
+		{
+			uint16_t TargetID = SkelLoader->animations[AnimIndex].id;
+			uint16_t TargetVar = SkelLoader->animations[AnimIndex].variationIndex;
+
+			for (size_t i = 0; i < ChildSkelLoader->animations.size(); ++i)
+			{
+				if (ChildSkelLoader->animations[i].id == TargetID &&
+					ChildSkelLoader->animations[i].variationIndex == TargetVar)
+				{
+					CurrentAnimSource = ChildSkelLoader;
+					ResolvedIndex = static_cast<int32>(i);
+					break;
+				}
+			}
+		}
 	}
 
-	CurrentAnimIndex = AnimIndex;
+	// Load external .anim data from the correct source
+	if (CurrentAnimSource && ResolvedIndex >= 0)
+		CurrentAnimSource->loadAnimsForIndex(ResolvedIndex);
+	else if (Loader && ResolvedIndex >= 0)
+		Loader->loadAnimsForIndex(ResolvedIndex).get();
+
+	CurrentAnimIndex = ResolvedIndex;
 	AnimationTime = 0.f;
 	CalcAllBones();
 }
 
 void FWowM2Animator::StopAnimation()
 {
+	CurrentAnimSource = SkelLoader;
 	CurrentAnimIndex = 0;
 	AnimationTime = 0.f;
 	CalcAllBones();
@@ -99,6 +122,8 @@ void FWowM2Animator::Update(float DeltaTimeSeconds)
 
 float FWowM2Animator::GetDuration() const
 {
+	if (CurrentAnimSource && CurrentAnimIndex >= 0 && CurrentAnimIndex < static_cast<int32>(CurrentAnimSource->animations.size()))
+		return CurrentAnimSource->animations[CurrentAnimIndex].duration / 1000.f;
 	return GetAnimDuration(Loader, SkelLoader, CurrentAnimIndex) / 1000.f;
 }
 
@@ -188,15 +213,26 @@ static FQuat GetQuat(const M2Value& V)
 	return FQuat::Identity;
 }
 
-// Get the animation track for a bone — uses SKEL bones if available, fallback to M2
-const M2Track* GetBoneTrack(M2Loader* Loader, SKELLoader* SkelLoader, int32 BoneIndex, int32 TrackType)
+// Get the animation track for a bone from the current animation source
+// Matches wow.export's anim_bones concept: animation tracks come from CurrentAnimSource,
+// falling back to SkelLoader then Loader
+static const M2Track* GetBoneTrack(M2Loader* Loader, SKELLoader* SkelLoader, SKELLoader* AnimSource, int32 BoneIndex, int32 TrackType)
 {
+	// Try animation source first (child SKEL if it has the current animation)
+	if (AnimSource && BoneIndex < static_cast<int32>(AnimSource->bones.size()))
+	{
+		if (TrackType == 0) return &AnimSource->bones[BoneIndex].translation;
+		if (TrackType == 1) return &AnimSource->bones[BoneIndex].scale;
+		return &AnimSource->bones[BoneIndex].rotation;
+	}
+	// Fallback to structural skeleton
 	if (SkelLoader && BoneIndex < static_cast<int32>(SkelLoader->bones.size()))
 	{
 		if (TrackType == 0) return &SkelLoader->bones[BoneIndex].translation;
 		if (TrackType == 1) return &SkelLoader->bones[BoneIndex].scale;
 		return &SkelLoader->bones[BoneIndex].rotation;
 	}
+	// Fallback to M2
 	if (Loader && BoneIndex < static_cast<int32>(Loader->bones.size()))
 	{
 		if (TrackType == 0) return &Loader->bones[BoneIndex].translation;
@@ -208,7 +244,7 @@ const M2Track* GetBoneTrack(M2Loader* Loader, SKELLoader* SkelLoader, int32 Bone
 
 FVector FWowM2Animator::SampleVec3(int32 BoneIndex, int32 TrackType, int32 AnimIdx, float TimeMs, const FVector& Default)
 {
-	const M2Track* Track = GetBoneTrack(Loader, SkelLoader, BoneIndex, TrackType);
+	const M2Track* Track = GetBoneTrack(Loader, SkelLoader, CurrentAnimSource, BoneIndex, TrackType);
 	if (!Track) return Default;
 
 	if (AnimIdx < 0 || AnimIdx >= static_cast<int32>(Track->timestamps.size()))
@@ -238,7 +274,7 @@ FVector FWowM2Animator::SampleVec3(int32 BoneIndex, int32 TrackType, int32 AnimI
 
 FQuat FWowM2Animator::SampleQuat(int32 BoneIndex, int32 AnimIdx, float TimeMs)
 {
-	const M2Track* TrackPtr = GetBoneTrack(Loader, SkelLoader, BoneIndex, 2);
+	const M2Track* TrackPtr = GetBoneTrack(Loader, SkelLoader, CurrentAnimSource, BoneIndex, 2);
 	if (!TrackPtr) return FQuat::Identity;
 
 	const auto& Track = *TrackPtr;
@@ -327,9 +363,9 @@ void FWowM2Animator::CalcAllBones()
 			}
 		}
 
-		const M2Track* TransTrack = GetBoneTrack(Loader, SkelLoader, Idx, 0);
-		const M2Track* RotTrack = GetBoneTrack(Loader, SkelLoader, Idx, 2);
-		const M2Track* ScaleTrack = GetBoneTrack(Loader, SkelLoader, Idx, 1);
+		const M2Track* TransTrack = GetBoneTrack(Loader, SkelLoader, CurrentAnimSource, Idx, 0);
+		const M2Track* RotTrack = GetBoneTrack(Loader, SkelLoader, CurrentAnimSource, Idx, 2);
+		const M2Track* ScaleTrack = GetBoneTrack(Loader, SkelLoader, CurrentAnimSource, Idx, 1);
 
 		bool bHasTrans = TransTrack && EffAnimIdx >= 0 && EffAnimIdx < static_cast<int32>(TransTrack->timestamps.size()) && !TransTrack->timestamps[EffAnimIdx].empty();
 		bool bHasRot = RotTrack && EffAnimIdx >= 0 && EffAnimIdx < static_cast<int32>(RotTrack->timestamps.size()) && !RotTrack->timestamps[EffAnimIdx].empty();

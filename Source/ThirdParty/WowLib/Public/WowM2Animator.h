@@ -38,8 +38,9 @@ private:
 	FQuat SampleQuat(int32 BoneIndex, int32 AnimIdx, float TimeMs);
 
 	M2Loader* Loader = nullptr;
-	SKELLoader* SkelLoader = nullptr;
-	SKELLoader* ChildSkelLoader = nullptr;
+	SKELLoader* SkelLoader = nullptr;      // Parent/main skeleton (structural bones)
+	SKELLoader* ChildSkelLoader = nullptr;  // Child skeleton (animation overrides)
+	SKELLoader* CurrentAnimSource = nullptr; // Which SKEL provides current animation tracks
 
 	int32 CurrentAnimIndex = -1;
 	float AnimationTime = 0.f;
