@@ -515,7 +515,13 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 
 void SWowModelPreview::UpdateBoneTransforms()
 {
-	if (!Animator || !MeshComponent) return;
+	if (!MeshComponent) return;
+
+	if (!bSkeletonEnabled || !Animator)
+	{
+		MeshComponent->RefreshBoneTransforms();
+		return;
+	}
 
 	const auto& Transforms = Animator->GetBoneLocalTransforms();
 	const int32 NumBones = FMath::Min(Transforms.Num(), MeshComponent->GetNumBones());
@@ -524,6 +530,27 @@ void SWowModelPreview::UpdateBoneTransforms()
 		MeshComponent->BoneSpaceTransforms[i] = Transforms[i];
 
 	MeshComponent->RefreshBoneTransforms();
+}
+
+void SWowModelPreview::SetSkeletonEnabled(bool bEnabled)
+{
+	bSkeletonEnabled = bEnabled;
+	if (!MeshComponent || !PreviewMesh) return;
+
+	if (!bEnabled)
+	{
+		if (Animator && Animator->IsPlaying())
+			Animator->StopAnimation();
+
+		const FReferenceSkeleton& RefSkel = PreviewMesh->GetRefSkeleton();
+		for (int32 i = 0; i < MeshComponent->GetNumBones(); ++i)
+			MeshComponent->BoneSpaceTransforms[i] = RefSkel.GetRefBonePose()[i];
+		MeshComponent->RefreshBoneTransforms();
+	}
+	else
+	{
+		UpdateBoneTransforms();
+	}
 }
 
 void SWowModelPreview::DrawBones(FPrimitiveDrawInterface* PDI)
@@ -626,7 +653,7 @@ void SWowModelPreview::ApplyCreatureDisplay(const FWowCreatureDisplay& Display)
 
 void SWowModelPreview::TickAnimation(float DeltaSeconds)
 {
-	if (!Animator || !Animator->IsPlaying() || Animator->bPaused) return;
+	if (!bSkeletonEnabled || !Animator || !Animator->IsPlaying() || Animator->bPaused) return;
 	Animator->Update(DeltaSeconds);
 	UpdateBoneTransforms();
 }

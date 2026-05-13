@@ -50,6 +50,8 @@ public:
 	bool IsAnimationPaused() const;
 
 	bool bShowBones = false;
+	bool bSkeletonEnabled = true;
+	void SetSkeletonEnabled(bool bEnabled);
 
 private:
 	void DrawBones(FPrimitiveDrawInterface* PDI);

@@ -783,6 +783,21 @@ void SWowCASCBrowser::BuildGeosetPanel()
 		]
 	];
 
+	// Enable Skeleton toggle
+	GeosetPanel->AddSlot()
+	.AutoHeight()
+	.Padding(4, 2, 4, 4)
+	[
+		SNew(SCheckBox)
+		.IsChecked_Lambda([this]() { return ModelPreview->bSkeletonEnabled ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+		.OnCheckStateChanged_Lambda([this](ECheckBoxState State) { ModelPreview->SetSkeletonEnabled(State == ECheckBoxState::Checked); })
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("EnableSkeleton", "Enable Skeleton"))
+			.Font(FCoreStyle::GetDefaultFontStyle("Regular", 9))
+		]
+	];
+
 	GeosetPanel->SetVisibility(EVisibility::Visible);
 }
 
