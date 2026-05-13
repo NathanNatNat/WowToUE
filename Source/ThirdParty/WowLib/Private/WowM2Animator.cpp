@@ -29,6 +29,28 @@ void FWowM2Animator::Initialize(M2Loader* InLoader, SKELLoader* InSkelLoader, SK
 			if (Loader->animations[i].id == 15) { HandsClosedAnimIndex = static_cast<int32>(i); break; }
 	}
 
+	// Cache parent indices and bone IDs from structural skeleton
+	BoneParentIndices.SetNum(BoneCount);
+	BoneIDs.SetNum(BoneCount);
+	for (int32 i = 0; i < BoneCount; ++i)
+	{
+		if (SkelLoader && i < static_cast<int32>(SkelLoader->bones.size()))
+		{
+			BoneParentIndices[i] = SkelLoader->bones[i].parentBone;
+			BoneIDs[i] = SkelLoader->bones[i].boneID;
+		}
+		else if (Loader && i < static_cast<int32>(Loader->bones.size()))
+		{
+			BoneParentIndices[i] = Loader->bones[i].parentBone;
+			BoneIDs[i] = Loader->bones[i].boneID;
+		}
+		else
+		{
+			BoneParentIndices[i] = -1;
+			BoneIDs[i] = -1;
+		}
+	}
+
 	BoneLocalTransforms.SetNum(BoneCount);
 	BoneCalculated.SetNum(BoneCount);
 
@@ -37,6 +59,11 @@ void FWowM2Animator::Initialize(M2Loader* InLoader, SKELLoader* InSkelLoader, SK
 	GlobalSeqTimes.SetNumZeroed(GlobalLoops.size());
 
 	StopAnimation();
+}
+
+void FWowM2Animator::SetUEPivots(const TArray<FVector>& InPivots)
+{
+	UEPivots = InPivots;
 }
 
 // Helpers
@@ -337,7 +364,7 @@ FQuat FWowM2Animator::SampleQuat(int32 BoneIndex, int32 AnimIdx, float TimeMs)
 
 void FWowM2Animator::CalcAllBones()
 {
-	if (BoneCount == 0) return;
+	if (BoneCount == 0 || UEPivots.Num() < BoneCount) return;
 
 	const float TimeMs = AnimationTime * 1000.f;
 	const int32 AnimIdx = CurrentAnimIndex;
@@ -346,52 +373,87 @@ void FWowM2Animator::CalcAllBones()
 	BoneCalculated.SetNum(BoneCount);
 	for (int32 i = 0; i < BoneCount; ++i) BoneCalculated[i] = false;
 
-	TArray<FMatrix> ComponentMatrices;
-	ComponentMatrices.SetNum(BoneCount);
+	// Calculate bone matrices EXACTLY like wow.export (WowLib space, column-major)
+	// Using raw float[16] arrays to avoid any UE FMatrix convention confusion
+	// Then convert final matrices to UE FTransform via similarity transform
 
-	// Hand grip: only apply if the flag is set (matching wow.export close_r/close_l)
+	// Column-major 4x4 matrix helpers (matching wow.export's mat4_multiply)
+	auto Mat4Identity = [](float* m) {
+		FMemory::Memzero(m, 16 * sizeof(float));
+		m[0] = m[5] = m[10] = m[15] = 1.f;
+	};
+
+	auto Mat4Multiply = [](float* out, const float* a, const float* b) {
+		for (int c = 0; c < 4; ++c) {
+			for (int r = 0; r < 4; ++r) {
+				out[c * 4 + r] = a[0 * 4 + r] * b[c * 4 + 0]
+					+ a[1 * 4 + r] * b[c * 4 + 1]
+					+ a[2 * 4 + r] * b[c * 4 + 2]
+					+ a[3 * 4 + r] * b[c * 4 + 3];
+			}
+		}
+	};
+
+	auto Mat4FromTranslation = [](float* m, float x, float y, float z) {
+		FMemory::Memzero(m, 16 * sizeof(float));
+		m[0] = m[5] = m[10] = m[15] = 1.f;
+		m[12] = x; m[13] = y; m[14] = z;
+	};
+
+	auto Mat4FromScale = [](float* m, float x, float y, float z) {
+		FMemory::Memzero(m, 16 * sizeof(float));
+		m[0] = x; m[5] = y; m[10] = z; m[15] = 1.f;
+	};
+
+	auto Mat4FromQuat = [](float* m, float qx, float qy, float qz, float qw) {
+		float x2 = qx + qx, y2 = qy + qy, z2 = qz + qz;
+		float xx = qx * x2, xy = qx * y2, xz = qx * z2;
+		float yy = qy * y2, yz = qy * z2, zz = qz * z2;
+		float wx = qw * x2, wy = qw * y2, wz = qw * z2;
+		m[0] = 1 - (yy + zz); m[1] = xy + wz;       m[2] = xz - wy;       m[3] = 0;
+		m[4] = xy - wz;       m[5] = 1 - (xx + zz); m[6] = yz + wx;       m[7] = 0;
+		m[8] = xz + wy;       m[9] = yz - wx;       m[10] = 1 - (xx + yy); m[11] = 0;
+		m[12] = 0;             m[13] = 0;             m[14] = 0;             m[15] = 1;
+	};
+
+	auto Mat4Copy = [](float* dst, const float* src) { FMemory::Memcpy(dst, src, 16 * sizeof(float)); };
+
+	TArray<float> BoneMatrices;
+	BoneMatrices.SetNumZeroed(BoneCount * 16);
+
 	const bool bCloseR = bCloseRightHand && HandsClosedAnimIndex >= 0;
 	const bool bCloseL = bCloseLeftHand && HandsClosedAnimIndex >= 0;
+
+	float local_mat[16], temp[16], pivot_mat[16], trans_mat[16], rot_mat[16], scale_mat[16], neg_pivot_mat[16];
 
 	TFunction<void(int32)> CalcBone = [&](int32 Idx)
 	{
 		if (Idx < 0 || Idx >= BoneCount || BoneCalculated[Idx])
 			return;
 
-		// Structural bone data (pivot, parent, boneID)
-		float Bpx = 0, Bpy = 0, Bpz = 0;
-		int32 ParentIdx = -1;
-		int32 BoneID = -1;
-
-		if (SkelLoader && Idx < static_cast<int32>(SkelLoader->bones.size()))
-		{
-			const auto& B = SkelLoader->bones[Idx];
-			ParentIdx = B.parentBone;
-			BoneID = B.boneID;
-			if (B.pivot.size() >= 3) { Bpx = B.pivot[0]; Bpy = B.pivot[1]; Bpz = B.pivot[2]; }
-		}
-		else if (Loader && Idx < static_cast<int32>(Loader->bones.size()))
-		{
-			const auto& B = Loader->bones[Idx];
-			ParentIdx = B.parentBone;
-			BoneID = B.boneID;
-			if (B.pivot.size() >= 3) { Bpx = B.pivot[0]; Bpy = B.pivot[1]; Bpz = B.pivot[2]; }
-		}
+		int32 ParentIdx = BoneParentIndices[Idx];
+		int32 BoneID = BoneIDs[Idx];
 
 		if (ParentIdx >= 0 && ParentIdx < BoneCount)
 			CalcBone(ParentIdx);
 
-		float Px = Bpx, Py = Bpy, Pz = Bpz;
+		// Get WowLib-space pivot from structural skeleton
+		float Px = 0, Py = 0, Pz = 0;
+		if (SkelLoader && Idx < static_cast<int32>(SkelLoader->bones.size()))
+		{
+			const auto& B = SkelLoader->bones[Idx];
+			if (B.pivot.size() >= 3) { Px = B.pivot[0]; Py = B.pivot[1]; Pz = B.pivot[2]; }
+		}
+		else if (Loader && Idx < static_cast<int32>(Loader->bones.size()))
+		{
+			const auto& B = Loader->bones[Idx];
+			if (B.pivot.size() >= 3) { Px = B.pivot[0]; Py = B.pivot[1]; Pz = B.pivot[2]; }
+		}
 
-		// Determine effective animation — finger bones use HandsClosed when grip is active
 		int32 EffAnimIdx = AnimIdx;
 		float EffTimeMs = TimeMs;
 
-		bool bIsRightFinger = BoneID >= 8 && BoneID <= 12;
-		bool bIsLeftFinger = BoneID >= 13 && BoneID <= 17;
-		bool bUseClosedHand = (bIsRightFinger && bCloseR) || (bIsLeftFinger && bCloseL);
-
-		if (bUseClosedHand)
+		if ((BoneID >= 8 && BoneID <= 12 && bCloseR) || (BoneID >= 13 && BoneID <= 17 && bCloseL))
 		{
 			EffAnimIdx = HandsClosedAnimIndex;
 			EffTimeMs = 0.f;
@@ -406,28 +468,29 @@ void FWowM2Animator::CalcAllBones()
 		bool bHasScale = ScaleTrack && EffAnimIdx >= 0 && EffAnimIdx < static_cast<int32>(ScaleTrack->timestamps.size()) && !ScaleTrack->timestamps[EffAnimIdx].empty();
 		bool bHasScaleFallback = !bHasScale && EffAnimIdx != 0 && ScaleTrack && !ScaleTrack->timestamps.empty() && !ScaleTrack->timestamps[0].empty();
 
-		FMatrix LocalMat = FMatrix::Identity;
+		Mat4Identity(local_mat);
 
 		if (bHasTrans || bHasRot || bHasScale || bHasScaleFallback)
 		{
-			FMatrix Result = FMatrix::Identity;
-
-			FMatrix PivotMat = FMatrix::Identity;
-			PivotMat.M[3][0] = Px; PivotMat.M[3][1] = Py; PivotMat.M[3][2] = Pz;
-			Result = Result * PivotMat;
+			// wow.export column-major: local = I * T(pivot) * T(trans) * R(rot) * S(scale) * T(-pivot)
+			Mat4FromTranslation(pivot_mat, Px, Py, Pz);
+			Mat4Multiply(temp, local_mat, pivot_mat);
+			Mat4Copy(local_mat, temp);
 
 			if (bHasTrans)
 			{
 				FVector T = SampleVec3(Idx, 0, EffAnimIdx, EffTimeMs, FVector::ZeroVector);
-				FMatrix TransMat = FMatrix::Identity;
-				TransMat.M[3][0] = T.X; TransMat.M[3][1] = T.Y; TransMat.M[3][2] = T.Z;
-				Result = Result * TransMat;
+				Mat4FromTranslation(trans_mat, T.X, T.Y, T.Z);
+				Mat4Multiply(temp, local_mat, trans_mat);
+				Mat4Copy(local_mat, temp);
 			}
 
 			if (bHasRot)
 			{
 				FQuat Q = SampleQuat(Idx, EffAnimIdx, EffTimeMs);
-				Result = Result * FQuatRotationMatrix(Q);
+				Mat4FromQuat(rot_mat, Q.X, Q.Y, Q.Z, Q.W);
+				Mat4Multiply(temp, local_mat, rot_mat);
+				Mat4Copy(local_mat, temp);
 			}
 
 			if (bHasScale || bHasScaleFallback)
@@ -435,22 +498,27 @@ void FWowM2Animator::CalcAllBones()
 				int32 ScaleAnimIdx = bHasScale ? EffAnimIdx : 0;
 				float ScaleTime = bHasScale ? EffTimeMs : 0.f;
 				FVector S = SampleVec3(Idx, 1, ScaleAnimIdx, ScaleTime, FVector::OneVector);
-				FMatrix ScaleMat = FMatrix::Identity;
-				ScaleMat.M[0][0] = S.X; ScaleMat.M[1][1] = S.Y; ScaleMat.M[2][2] = S.Z;
-				Result = Result * ScaleMat;
+				Mat4FromScale(scale_mat, S.X, S.Y, S.Z);
+				Mat4Multiply(temp, local_mat, scale_mat);
+				Mat4Copy(local_mat, temp);
 			}
 
-			FMatrix NegPivotMat = FMatrix::Identity;
-			NegPivotMat.M[3][0] = -Px; NegPivotMat.M[3][1] = -Py; NegPivotMat.M[3][2] = -Pz;
-			Result = Result * NegPivotMat;
-
-			LocalMat = Result;
+			Mat4FromTranslation(neg_pivot_mat, -Px, -Py, -Pz);
+			Mat4Multiply(temp, local_mat, neg_pivot_mat);
+			Mat4Copy(local_mat, temp);
 		}
 
+		// Parent chain: component = parent * local (column-major)
+		float* CompMat = &BoneMatrices[Idx * 16];
 		if (ParentIdx >= 0 && ParentIdx < BoneCount)
-			ComponentMatrices[Idx] = ComponentMatrices[ParentIdx] * LocalMat;
+		{
+			const float* ParentMat = &BoneMatrices[ParentIdx * 16];
+			Mat4Multiply(CompMat, ParentMat, local_mat);
+		}
 		else
-			ComponentMatrices[Idx] = LocalMat;
+		{
+			Mat4Copy(CompMat, local_mat);
+		}
 
 		BoneCalculated[Idx] = true;
 	};
@@ -458,39 +526,29 @@ void FWowM2Animator::CalcAllBones()
 	for (int32 i = 0; i < BoneCount; ++i)
 		CalcBone(i);
 
-	// Convert component-space WowLib matrices to UE bone-local FTransforms
+	// Convert WowLib column-major component matrices to UE component-space FTransforms
+	// These are set directly via SetBoneTransformByName with EBoneSpaces::ComponentSpace
 	for (int32 i = 0; i < BoneCount; ++i)
 	{
-		FMatrix WL_Local = FMatrix::Identity;
-		int32 ParentIdx = -1;
-		if (SkelLoader && i < static_cast<int32>(SkelLoader->bones.size()))
-			ParentIdx = SkelLoader->bones[i].parentBone;
-		else if (Loader && i < static_cast<int32>(Loader->bones.size()))
-			ParentIdx = Loader->bones[i].parentBone;
+		const float* WL = &BoneMatrices[i * 16];
 
-		if (ParentIdx >= 0 && ParentIdx < BoneCount)
-			WL_Local = ComponentMatrices[ParentIdx].Inverse() * ComponentMatrices[i];
-		else
-			WL_Local = ComponentMatrices[i];
-
-		FVector WL_Trans(WL_Local.M[3][0], WL_Local.M[3][1], WL_Local.M[3][2]);
-
-		FVector WL_ScaleX(WL_Local.M[0][0], WL_Local.M[0][1], WL_Local.M[0][2]);
-		FVector WL_ScaleY(WL_Local.M[1][0], WL_Local.M[1][1], WL_Local.M[1][2]);
-		FVector WL_ScaleZ(WL_Local.M[2][0], WL_Local.M[2][1], WL_Local.M[2][2]);
-		float Sx = WL_ScaleX.Size(), Sy = WL_ScaleY.Size(), Sz = WL_ScaleZ.Size();
-
-		FMatrix RotMat = WL_Local;
-		if (Sx > SMALL_NUMBER) { RotMat.M[0][0] /= Sx; RotMat.M[0][1] /= Sx; RotMat.M[0][2] /= Sx; }
-		if (Sy > SMALL_NUMBER) { RotMat.M[1][0] /= Sy; RotMat.M[1][1] /= Sy; RotMat.M[1][2] /= Sy; }
-		if (Sz > SMALL_NUMBER) { RotMat.M[2][0] /= Sz; RotMat.M[2][1] /= Sz; RotMat.M[2][2] /= Sz; }
-		RotMat.M[3][0] = 0; RotMat.M[3][1] = 0; RotMat.M[3][2] = 0;
-		FQuat WL_Rot = FQuat(RotMat);
-
+		// Column-major WL translation is in column 3
+		FVector WL_Trans(WL[12], WL[13], WL[14]);
 		FVector UE_Trans = WowLibToUE_Translation(WL_Trans.X, WL_Trans.Y, WL_Trans.Z);
-		FQuat UE_Rot = WowLibToUE_Rotation(WL_Rot.X, WL_Rot.Y, WL_Rot.Z, WL_Rot.W);
-		FVector UE_Scale = WowLibToUE_Scale(Sx, Sy, Sz);
 
-		BoneLocalTransforms[i] = FTransform(UE_Rot, UE_Trans, UE_Scale);
+		// Build UE rotation: similarity transform Conv * M_wl^T * Conv^-1
+		// Conv permutation: WL{x,y,z} → UE{z,x,y} (indices: 2,0,1)
+		// M_wl^T because column-major→row-major transpose
+		FMatrix UE_Mat = FMatrix::Identity;
+		static const int32 P[3] = { 2, 0, 1 };
+		for (int32 r = 0; r < 3; ++r)
+			for (int32 c = 0; c < 3; ++c)
+				UE_Mat.M[r][c] = WL[P[r] * 4 + P[c]];
+
+		UE_Mat.M[3][0] = UE_Trans.X;
+		UE_Mat.M[3][1] = UE_Trans.Y;
+		UE_Mat.M[3][2] = UE_Trans.Z;
+
+		BoneLocalTransforms[i] = FTransform(UE_Mat);
 	}
 }

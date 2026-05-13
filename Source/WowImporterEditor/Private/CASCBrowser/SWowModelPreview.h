@@ -13,7 +13,9 @@ class FWowModelPreviewClient : public FEditorViewportClient
 public:
 	FWowModelPreviewClient(FAdvancedPreviewScene& InPreviewScene, const TSharedRef<SEditorViewport>& InViewport);
 	virtual void Tick(float DeltaSeconds) override;
+	virtual void Draw(const FSceneView* View, FPrimitiveDrawInterface* PDI) override;
 	TFunction<void(float)> OnTick;
+	TFunction<void(FPrimitiveDrawInterface*)> OnDraw;
 };
 
 class SWowModelPreview : public SEditorViewport
@@ -47,7 +49,10 @@ public:
 	int32 GetAnimationFrameCount() const;
 	bool IsAnimationPaused() const;
 
+	bool bShowBones = false;
+
 private:
+	void DrawBones(FPrimitiveDrawInterface* PDI);
 	virtual TSharedRef<FEditorViewportClient> MakeEditorViewportClient() override;
 
 	void RebuildMesh(bool bFitCamera = false);

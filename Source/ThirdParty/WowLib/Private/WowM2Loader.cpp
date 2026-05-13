@@ -414,13 +414,20 @@ bool FWowM2Loader::LoadM3(uint32 FileDataID, FWowM2ModelData& OutModel, FString&
 		for (int32 i = 0; i < OutModel.UVs.Num(); ++i)
 			OutModel.UVs[i] = FVector2f(Loader.uv[i * 2], Loader.uv[i * 2 + 1]);
 
-		// M3 indices are direct (no skin indirection)
-		OutModel.Indices.SetNumUninitialized(Loader.indices.size());
+		// M3 indices are direct vertex indices — no skin indirection layer
+		// RebuildMesh does: vertIdx = Indices[Triangles[i]]
+		// So Indices = identity mapping, Triangles = actual M3 indices
+		uint16 MaxIdx = 0;
 		for (size_t i = 0; i < Loader.indices.size(); ++i)
-			OutModel.Indices[i] = Loader.indices[i];
+			MaxIdx = FMath::Max(MaxIdx, Loader.indices[i]);
 
-		// For M3, Triangles = Indices (no skin indirection layer)
-		OutModel.Triangles = OutModel.Indices;
+		OutModel.Indices.SetNum(MaxIdx + 1);
+		for (int32 i = 0; i <= MaxIdx; ++i)
+			OutModel.Indices[i] = static_cast<uint16>(i);
+
+		OutModel.Triangles.SetNumUninitialized(Loader.indices.size());
+		for (size_t i = 0; i < Loader.indices.size(); ++i)
+			OutModel.Triangles[i] = Loader.indices[i];
 		OutModel.TriangleCount = static_cast<uint32>(Loader.indices.size() / 3);
 
 		// Geosets from first LOD only

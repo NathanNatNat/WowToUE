@@ -16,6 +16,7 @@ class WOWLIB_API FWowM2Animator
 {
 public:
 	void Initialize(M2Loader* InLoader, SKELLoader* InSkelLoader = nullptr, SKELLoader* InChildSkelLoader = nullptr);
+	void SetUEPivots(const TArray<FVector>& InPivots);
 
 	void PlayAnimation(int32 AnimIndex);
 	void StopAnimation();
@@ -52,6 +53,9 @@ private:
 	bool bIsPlaying = false;
 
 	int32 BoneCount = 0;
+	TArray<FVector> UEPivots;
+	TArray<int32> BoneParentIndices;
+	TArray<int32> BoneIDs;
 	TArray<float> GlobalSeqTimes;
 	TArray<FTransform> BoneLocalTransforms;
 	TArray<bool> BoneCalculated;

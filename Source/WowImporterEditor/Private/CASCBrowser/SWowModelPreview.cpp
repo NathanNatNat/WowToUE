@@ -34,6 +34,12 @@ void FWowModelPreviewClient::Tick(float DeltaSeconds)
 	if (OnTick) OnTick(DeltaSeconds);
 }
 
+void FWowModelPreviewClient::Draw(const FSceneView* View, FPrimitiveDrawInterface* PDI)
+{
+	FEditorViewportClient::Draw(View, PDI);
+	if (OnDraw) OnDraw(PDI);
+}
+
 void SWowModelPreview::Construct(const FArguments& InArgs)
 {
 	FAdvancedPreviewScene::ConstructionValues CVS;
@@ -55,6 +61,7 @@ TSharedRef<FEditorViewportClient> SWowModelPreview::MakeEditorViewportClient()
 {
 	ViewportClient = MakeShareable(new FWowModelPreviewClient(*PreviewScene, SharedThis(this)));
 	ViewportClient->OnTick = [this](float DeltaSeconds) { TickAnimation(DeltaSeconds); };
+	ViewportClient->OnDraw = [this](FPrimitiveDrawInterface* PDI) { DrawBones(PDI); };
 	return ViewportClient.ToSharedRef();
 }
 
@@ -183,6 +190,9 @@ UMaterial* SWowModelPreview::CreateUnlitMaterial(UTexture2D* Texture, uint16 Ble
 	default: Mat->BlendMode = BLEND_Opaque; break;
 	}
 
+	// Set skeletal mesh usage BEFORE adding expressions to avoid recompile losing texture refs
+	Mat->bUsedWithSkeletalMesh = true;
+
 	if (Texture)
 	{
 		auto* TexNode = NewObject<UMaterialExpressionTextureSample>(Mat);
@@ -204,8 +214,6 @@ UMaterial* SWowModelPreview::CreateUnlitMaterial(UTexture2D* Texture, uint16 Ble
 		}
 	}
 
-	bool bNeedsRecompile = false;
-	Mat->SetMaterialUsage(bNeedsRecompile, MATUSAGE_SkeletalMesh);
 	Mat->PostEditChange();
 	return Mat;
 }
@@ -218,11 +226,17 @@ void SWowModelPreview::SetM2Model(const FWowM2ModelData& ModelData, M2Loader* In
 	if (InLoader)
 	{
 		Animator = MakeShared<FWowM2Animator>();
-		// Parent skel has structural bones, child skel overrides anims
 		if (InParentSkelLoader)
 			Animator->Initialize(InLoader, InParentSkelLoader, InSkelLoader);
 		else
 			Animator->Initialize(InLoader, InSkelLoader);
+
+		// Pass UE-space pivots to animator
+		TArray<FVector> Pivots;
+		Pivots.SetNum(ModelData.Bones.Num());
+		for (int32 i = 0; i < ModelData.Bones.Num(); ++i)
+			Pivots[i] = FVector(ModelData.Bones[i].Pivot);
+		Animator->SetUEPivots(Pivots);
 	}
 
 	if (ModelData.Positions.Num() == 0 || ModelData.Triangles.Num() == 0)
@@ -477,7 +491,6 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 	MeshComponent->SetSkinnedAssetAndUpdate(PreviewMesh);
 	PreviewScene->AddComponent(MeshComponent, FTransform(WowOrient));
 
-	// Apply rest pose bone transforms
 	UpdateBoneTransforms();
 
 	if (bFitCamera && ViewportClient.IsValid())
@@ -497,10 +510,41 @@ void SWowModelPreview::UpdateBoneTransforms()
 	const auto& Transforms = Animator->GetBoneLocalTransforms();
 	const int32 NumBones = FMath::Min(Transforms.Num(), MeshComponent->GetNumBones());
 
-	for (int32 i = 0; i < NumBones; ++i)
-		MeshComponent->BoneSpaceTransforms[i] = Transforms[i];
+	for (int32 i = 0; i < NumBones && i < CurrentModelData.Bones.Num(); ++i)
+	{
+		MeshComponent->SetBoneTransformByName(
+			CurrentModelData.Bones[i].BoneName,
+			Transforms[i],
+			EBoneSpaces::ComponentSpace);
+	}
 
 	MeshComponent->MarkRefreshTransformDirty();
+}
+
+void SWowModelPreview::DrawBones(FPrimitiveDrawInterface* PDI)
+{
+	if (!bShowBones || !MeshComponent || !PDI) return;
+
+	const int32 NumBones = MeshComponent->GetNumBones();
+	const FTransform CompTransform = MeshComponent->GetComponentTransform();
+
+	for (int32 i = 0; i < NumBones; ++i)
+	{
+		FTransform BoneTransform = MeshComponent->GetBoneTransform(i);
+		FVector BonePos = BoneTransform.GetLocation();
+
+		// Draw bone point
+		PDI->DrawPoint(BonePos, FLinearColor::Yellow, 4.0f, SDPG_Foreground);
+
+		// Draw line to parent
+		int32 ParentIdx = (i < CurrentModelData.Bones.Num()) ? CurrentModelData.Bones[i].ParentIndex : -1;
+		if (ParentIdx >= 0 && ParentIdx < NumBones)
+		{
+			FTransform ParentTransform = MeshComponent->GetBoneTransform(ParentIdx);
+			FVector ParentPos = ParentTransform.GetLocation();
+			PDI->DrawLine(ParentPos, BonePos, FLinearColor::Green, SDPG_Foreground);
+		}
+	}
 }
 
 uint16 SWowModelPreview::GetSubMeshID(int32 Index) const

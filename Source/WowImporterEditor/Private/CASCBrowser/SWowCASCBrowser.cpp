@@ -768,6 +768,21 @@ void SWowCASCBrowser::BuildGeosetPanel()
 		];
 	}
 
+	// Show Bones toggle
+	GeosetPanel->AddSlot()
+	.AutoHeight()
+	.Padding(4, 8, 4, 4)
+	[
+		SNew(SCheckBox)
+		.IsChecked_Lambda([this]() { return ModelPreview->bShowBones ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+		.OnCheckStateChanged_Lambda([this](ECheckBoxState State) { ModelPreview->bShowBones = (State == ECheckBoxState::Checked); })
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("ShowBones", "Show Bones"))
+			.Font(FCoreStyle::GetDefaultFontStyle("Regular", 9))
+		]
+	];
+
 	GeosetPanel->SetVisibility(EVisibility::Visible);
 }
 
