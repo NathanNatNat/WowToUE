@@ -472,7 +472,11 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 		}
 
 		const auto& Sub = MD.SubMeshes[OldIdx];
-		UMaterial* Mat = CreateUnlitMaterial(TexForSlot, Sub.BlendMode, Sub.MaterialFlags);
+		UMaterialInterface* Mat;
+		if (TexForSlot)
+			Mat = CreateUnlitMaterial(TexForSlot, Sub.BlendMode, Sub.MaterialFlags);
+		else
+			Mat = UMaterial::GetDefaultMaterial(MD_Surface);
 
 		FSkeletalMaterial SkMat;
 		SkMat.MaterialInterface = Mat;
