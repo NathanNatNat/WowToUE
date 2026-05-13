@@ -283,6 +283,11 @@ FVector FWowM2Animator::SampleVec3(int32 BoneIndex, int32 TrackType, int32 AnimI
 		return GetVec3(Values.back(), Default);
 
 	int32 Frame = FindKeyframe(Timestamps, TimeMs);
+
+	// Step interpolation: return exact keyframe value without lerp
+	if (Track->interpolation == 0)
+		return GetVec3(Values[Frame], Default);
+
 	float T0 = GetTimestampMs(Timestamps[Frame]);
 	float T1 = GetTimestampMs(Timestamps[Frame + 1]);
 	float Dt = T1 - T0;
@@ -315,6 +320,11 @@ FQuat FWowM2Animator::SampleQuat(int32 BoneIndex, int32 AnimIdx, float TimeMs)
 		return GetQuat(Values.back());
 
 	int32 Frame = FindKeyframe(Timestamps, TimeMs);
+
+	// Step interpolation: return exact keyframe value without slerp
+	if (Track.interpolation == 0)
+		return GetQuat(Values[Frame]);
+
 	float T0 = GetTimestampMs(Timestamps[Frame]);
 	float T1 = GetTimestampMs(Timestamps[Frame + 1]);
 	float Dt = T1 - T0;
