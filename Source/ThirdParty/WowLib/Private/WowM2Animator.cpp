@@ -214,20 +214,20 @@ void FWowM2Animator::StepFrame(int32 Delta)
 	SetFrame(Frame);
 }
 
-// WowLib→UE: matches UE glTF importer ConvertVec3/ConvertQuat (Y/Z swap, negate quat imaginary)
-static FVector WowLibToUE_Translation(float x, float y, float z)
+// Direct WoW→UE: negate Y to flip handedness (det=-1). No WebGL intermediate.
+static FVector WowToUE_Translation(float x, float y, float z)
 {
-	return FVector(x * 100.0, z * 100.0, y * 100.0);
+	return FVector(x * 100.0, -y * 100.0, z * 100.0);
 }
 
-static FQuat WowLibToUE_Rotation(float qx, float qy, float qz, float qw)
+static FQuat WowToUE_Rotation(float qx, float qy, float qz, float qw)
 {
-	return FQuat(-qx, -qz, -qy, qw);
+	return FQuat(-qx, qy, -qz, qw);
 }
 
-static FVector WowLibToUE_Scale(float sx, float sy, float sz)
+static FVector WowToUE_Scale(float sx, float sy, float sz)
 {
-	return FVector(sx, sz, sy);
+	return FVector(sx, sy, sz);
 }
 
 static int32 FindKeyframe(const std::vector<M2Value>& Timestamps, float TimeMs)
@@ -541,9 +541,9 @@ void FWowM2Animator::CalcAllBones()
 					WL_S = SampleVec3(Idx, 1, ScaleAnimIdx, ScaleTime, FVector::OneVector);
 				}
 
-				FVector UE_Trans = LocalPivotOffset + WowLibToUE_Translation(WL_T.X, WL_T.Y, WL_T.Z);
-				FQuat UE_Rot = WowLibToUE_Rotation(WL_Q.X, WL_Q.Y, WL_Q.Z, WL_Q.W);
-				FVector UE_Scale = WowLibToUE_Scale(WL_S.X, WL_S.Y, WL_S.Z);
+				FVector UE_Trans = LocalPivotOffset + WowToUE_Translation(WL_T.X, WL_T.Y, WL_T.Z);
+				FQuat UE_Rot = WowToUE_Rotation(WL_Q.X, WL_Q.Y, WL_Q.Z, WL_Q.W);
+				FVector UE_Scale = WowToUE_Scale(WL_S.X, WL_S.Y, WL_S.Z);
 
 				BoneLocalTransforms[Idx] = FTransform(UE_Rot, UE_Trans, UE_Scale);
 			}

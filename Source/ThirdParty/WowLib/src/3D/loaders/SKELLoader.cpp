@@ -106,8 +106,8 @@ void SKELLoader::parse_chunk_skb1() {
 				const float dy = v[1];
 				const float dz = v[2];
 				v[0] = dx;
-				v[2] = dy * -1;
-				v[1] = dz;
+				v[1] = dy;
+				v[2] = dz;
 			}
 		}
 
@@ -119,8 +119,8 @@ void SKELLoader::parse_chunk_skb1() {
 				const float dz = v[2];
 				const float dw = v[3];
 				v[0] = dx;
-				v[2] = dy * -1;
-				v[1] = dz;
+				v[1] = dy;
+				v[2] = dz;
 				v[3] = dw;
 			}
 		}
@@ -132,8 +132,8 @@ void SKELLoader::parse_chunk_skb1() {
 				const float dy = v[1];
 				const float dz = v[2];
 				v[0] = dx;
-				v[2] = dy;
-				v[1] = dz;
+				v[1] = dy;
+				v[2] = dz;
 			}
 		}
 
@@ -142,8 +142,8 @@ void SKELLoader::parse_chunk_skb1() {
 			const float pivotY = pivot[1];
 			const float pivotZ = pivot[2];
 			pivot[0] = pivotX;
-			pivot[2] = pivotY * -1;
-			pivot[1] = pivotZ;
+			pivot[1] = pivotY;
+			pivot[2] = pivotZ;
 		}
 
 		this->bones[i] = std::move(bone);
@@ -367,8 +367,8 @@ void SKELLoader::_patch_bone_animation(uint32_t animIndex) {
 				const float dy = v[1];
 				const float dz = v[2];
 				v[0] = dx;
-				v[2] = dy * -1;
-				v[1] = dz;
+				v[1] = dy;
+				v[2] = dz;
 			}
 		}
 
@@ -381,8 +381,8 @@ void SKELLoader::_patch_bone_animation(uint32_t animIndex) {
 				const float dz = v[2];
 				const float dw = v[3];
 				v[0] = dx;
-				v[2] = dy * -1;
-				v[1] = dz;
+				v[1] = dy;
+				v[2] = dz;
 				v[3] = dw;
 			}
 		}
@@ -395,8 +395,8 @@ void SKELLoader::_patch_bone_animation(uint32_t animIndex) {
 				const float dy = v[1];
 				const float dz = v[2];
 				v[0] = dx;
-				v[2] = dy;
-				v[1] = dz;
+				v[1] = dy;
+				v[2] = dz;
 			}
 		}
 	}

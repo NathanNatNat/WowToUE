@@ -225,8 +225,8 @@ const float dx = v[0];
 const float dy = v[1];
 const float dz = v[2];
 v[0] = dx;
-v[2] = dy * -1;
-v[1] = dz;
+v[1] = dy;
+v[2] = dz;
 }
 }
 
@@ -239,8 +239,8 @@ const float dy = v[1];
 const float dz = v[2];
 const float dw = v[3];
 v[0] = dx;
-v[2] = dy * -1;
-v[1] = dz;
+v[1] = dy;
+v[2] = dz;
 v[3] = dw;
 }
 }
@@ -253,8 +253,8 @@ const float dx = v[0];
 const float dy = v[1];
 const float dz = v[2];
 v[0] = dx;
-v[2] = dy;
-v[1] = dz;
+v[1] = dy;
+v[2] = dz;
 }
 }
 }
@@ -381,8 +381,8 @@ const float dx = v[0];
 const float dy = v[1];
 const float dz = v[2];
 v[0] = dx;
-v[2] = dy * -1;
-v[1] = dz;
+v[1] = dy;
+v[2] = dz;
 }
 }
 
@@ -394,8 +394,8 @@ const float dy = v[1];
 const float dz = v[2];
 const float dw = v[3];
 v[0] = dx;
-v[2] = dy * -1;
-v[1] = dz;
+v[1] = dy;
+v[2] = dz;
 v[3] = dw;
 }
 }
@@ -407,8 +407,8 @@ const float dx = v[0];
 const float dy = v[1];
 const float dz = v[2];
 v[0] = dx;
-v[2] = dy;
-v[1] = dz;
+v[1] = dy;
+v[2] = dz;
 }
 }
 
@@ -417,8 +417,8 @@ const float pivotX = pivot[0];
 const float pivotY = pivot[1];
 const float pivotZ = pivot[2];
 pivot[0] = pivotX;
-pivot[2] = pivotY * -1;
-pivot[1] = pivotZ;
+pivot[1] = pivotY;
+pivot[2] = pivotZ;
 }
 
 this->bones[i] = std::move(bone);
@@ -455,8 +455,8 @@ this->collisionPositions.resize(positionsCount * 3);
 for (uint32_t i = 0; i < positionsCount; i++) {
 const uint32_t index = i * 3;
 this->collisionPositions[index] = this->data.readFloatLE();
-this->collisionPositions[index + 2] = this->data.readFloatLE() * -1;
 this->collisionPositions[index + 1] = this->data.readFloatLE();
+this->collisionPositions[index + 2] = this->data.readFloatLE();
 }
 
 // Normals
@@ -465,8 +465,8 @@ this->collisionNormals.resize(normalsCount * 3);
 for (uint32_t i = 0; i < normalsCount; i++) {
 const uint32_t index = i * 3;
 this->collisionNormals[index] = this->data.readFloatLE();
-this->collisionNormals[index + 2] = this->data.readFloatLE() * -1;
 this->collisionNormals[index + 1] = this->data.readFloatLE();
+this->collisionNormals[index + 2] = this->data.readFloatLE();
 }
 
 this->data.seek(base);
@@ -579,8 +579,8 @@ this->boneIndices.resize(verticesCount * 4);
 
 for (uint32_t i = 0; i < verticesCount; i++) {
 this->vertices[i * 3] = this->data.readFloatLE();
-this->vertices[i * 3 + 2] = this->data.readFloatLE() * -1;
 this->vertices[i * 3 + 1] = this->data.readFloatLE();
+this->vertices[i * 3 + 2] = this->data.readFloatLE();
 
 for (int x = 0; x < 4; x++)
 this->boneWeights[i * 4 + x] = this->data.readUInt8();
@@ -589,8 +589,8 @@ for (int x = 0; x < 4; x++)
 this->boneIndices[i * 4 + x] = this->data.readUInt8();
 
 this->normals[i * 3] = this->data.readFloatLE();
-this->normals[i * 3 + 2] = this->data.readFloatLE() * -1;
 this->normals[i * 3 + 1] = this->data.readFloatLE();
+this->normals[i * 3 + 2] = this->data.readFloatLE();
 
 this->uv[i * 2] = this->data.readFloatLE();
 this->uv[i * 2 + 1] = this->data.readFloatLE();

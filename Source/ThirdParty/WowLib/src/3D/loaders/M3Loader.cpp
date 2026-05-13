@@ -142,8 +142,8 @@ void M3Loader::parseBufferChunk(uint32_t chunkSize, uint32_t chunkID, uint32_t p
 			this->vertices.resize(floatArray.size());
 			for (size_t i = 0; i < floatArray.size(); i += 3) {
 				this->vertices[i] = floatArray[i];
-				this->vertices[i + 2] = floatArray[i + 1] * -1;
-				this->vertices[i + 1] = floatArray[i + 2];
+				this->vertices[i + 1] = floatArray[i + 1];
+				this->vertices[i + 2] = floatArray[i + 2];
 			}
 			break;
 		}
@@ -155,8 +155,8 @@ void M3Loader::parseBufferChunk(uint32_t chunkSize, uint32_t chunkID, uint32_t p
 			this->normals.resize(floatArray.size());
 			for (size_t i = 0; i < floatArray.size(); i += 3) {
 				this->normals[i] = floatArray[i];
-				this->normals[i + 2] = floatArray[i + 1] * -1;
-				this->normals[i + 1] = floatArray[i + 2];
+				this->normals[i + 1] = floatArray[i + 1];
+				this->normals[i + 2] = floatArray[i + 2];
 			}
 			break;
 		}
