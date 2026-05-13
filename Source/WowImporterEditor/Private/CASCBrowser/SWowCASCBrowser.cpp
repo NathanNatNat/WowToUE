@@ -8,6 +8,8 @@
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SSlider.h"
+#include "Widgets/Input/SComboBox.h"
 #include "CASCBrowser/SWowModelPreview.h"
 #include "DesktopPlatformModule.h"
 #include "Misc/ConfigCacheIni.h"
@@ -619,6 +621,149 @@ void SWowCASCBrowser::BuildGeosetPanel()
 		.OnSelectionChanged(this, &SWowCASCBrowser::OnSkinSelected)
 	];
 
+	// Animation section
+	AnimationList.Empty();
+	if (ModelPreview.IsValid())
+	{
+		// "No Animation" entry
+		auto NoAnim = MakeShared<FWowAnimationInfo>();
+		NoAnim->AnimIndex = -1;
+		NoAnim->Label = TEXT("No Animation");
+		AnimationList.Add(NoAnim);
+
+		for (const auto& Anim : CurrentModelData.Animations)
+			AnimationList.Add(MakeShared<FWowAnimationInfo>(Anim));
+
+		SelectedAnimation = AnimationList[0];
+	}
+
+	if (AnimationList.Num() > 1)
+	{
+		GeosetPanel->AddSlot()
+		.AutoHeight()
+		.Padding(4, 8, 4, 4)
+		[
+			SNew(STextBlock)
+			.Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))
+			.Text(LOCTEXT("AnimHeader", "Animation"))
+		];
+
+		// Animation dropdown
+		GeosetPanel->AddSlot()
+		.AutoHeight()
+		.Padding(4, 0)
+		[
+			SNew(SComboBox<TSharedPtr<FWowAnimationInfo>>)
+			.OptionsSource(&AnimationList)
+			.OnSelectionChanged_Lambda([this](TSharedPtr<FWowAnimationInfo> Item, ESelectInfo::Type)
+			{
+				if (!Item.IsValid() || !ModelPreview.IsValid()) return;
+				SelectedAnimation = Item;
+				if (Item->AnimIndex < 0)
+					ModelPreview->StopAnimation();
+				else
+					ModelPreview->PlayAnimation(Item->AnimIndex);
+			})
+			.OnGenerateWidget_Lambda([](TSharedPtr<FWowAnimationInfo> Item)
+			{
+				return SNew(STextBlock)
+					.Text(FText::FromString(Item->Label))
+					.Font(FCoreStyle::GetDefaultFontStyle("Regular", 9));
+			})
+			[
+				SNew(STextBlock)
+				.Text_Lambda([this]()
+				{
+					return SelectedAnimation.IsValid() ? FText::FromString(SelectedAnimation->Label) : FText::GetEmpty();
+				})
+				.Font(FCoreStyle::GetDefaultFontStyle("Regular", 9))
+			]
+		];
+
+		// Play/Pause + Step buttons
+		GeosetPanel->AddSlot()
+		.AutoHeight()
+		.Padding(4, 4)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			[
+				SNew(SButton)
+				.Text_Lambda([this]()
+				{
+					return ModelPreview.IsValid() && ModelPreview->IsAnimationPaused()
+						? LOCTEXT("Play", "Play") : LOCTEXT("Pause", "Pause");
+				})
+				.OnClicked_Lambda([this]()
+				{
+					if (ModelPreview.IsValid())
+						ModelPreview->SetAnimationPaused(!ModelPreview->IsAnimationPaused());
+					return FReply::Handled();
+				})
+			]
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.Padding(4, 0, 0, 0)
+			[
+				SNew(SButton)
+				.Text(LOCTEXT("StepBack", "<<"))
+				.OnClicked_Lambda([this]()
+				{
+					if (ModelPreview.IsValid()) ModelPreview->StepAnimationFrame(-1);
+					return FReply::Handled();
+				})
+			]
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.Padding(2, 0, 0, 0)
+			[
+				SNew(SButton)
+				.Text(LOCTEXT("StepFwd", ">>"))
+				.OnClicked_Lambda([this]()
+				{
+					if (ModelPreview.IsValid()) ModelPreview->StepAnimationFrame(1);
+					return FReply::Handled();
+				})
+			]
+			+ SHorizontalBox::Slot()
+			.FillWidth(1.0f)
+			.Padding(8, 0, 0, 0)
+			.VAlign(VAlign_Center)
+			[
+				SNew(STextBlock)
+				.Text_Lambda([this]()
+				{
+					if (!ModelPreview.IsValid()) return FText::GetEmpty();
+					int32 F = ModelPreview->GetAnimationFrame();
+					int32 C = ModelPreview->GetAnimationFrameCount();
+					return FText::FromString(FString::Printf(TEXT("%d / %d"), F, C));
+				})
+				.Font(FCoreStyle::GetDefaultFontStyle("Regular", 8))
+			]
+		];
+
+		// Frame slider
+		GeosetPanel->AddSlot()
+		.AutoHeight()
+		.Padding(4, 0)
+		[
+			SNew(SSlider)
+			.Value_Lambda([this]()
+			{
+				if (!ModelPreview.IsValid()) return 0.f;
+				int32 C = ModelPreview->GetAnimationFrameCount();
+				return C > 1 ? static_cast<float>(ModelPreview->GetAnimationFrame()) / (C - 1) : 0.f;
+			})
+			.OnValueChanged_Lambda([this](float Value)
+			{
+				if (!ModelPreview.IsValid()) return;
+				int32 C = ModelPreview->GetAnimationFrameCount();
+				ModelPreview->SetAnimationFrame(FMath::RoundToInt32(Value * (C - 1)));
+			})
+		];
+	}
+
 	GeosetPanel->SetVisibility(EVisibility::Visible);
 }
 
@@ -719,6 +864,7 @@ void SWowCASCBrowser::PreviewM2(uint32 FileDataID, const FString& FileName)
 			ModelPreview->SetVisibility(EVisibility::Visible);
 			CachedM2Buffer = BufPtr;
 			CachedM2Loader = LoaderPtr;
+			CurrentModelData = *ModelDataPtr;
 			ModelPreview->SetM2Model(*ModelDataPtr, LoaderPtr.Get());
 
 			CreatureDisplays.Empty();

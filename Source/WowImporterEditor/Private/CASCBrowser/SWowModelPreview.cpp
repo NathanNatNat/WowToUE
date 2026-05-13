@@ -259,6 +259,56 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 	const int32 TriCount = NumTriIndices / 3;
 	const int32 VertCount = MD.Positions.Num();
 
+	// Apply bone transforms (CPU skinning)
+	TArray<FVector3f> SkinnedPositions;
+	TArray<FVector3f> SkinnedNormals;
+	if (Animator && MD.BoneWeights.Num() >= VertCount * 4 && MD.BoneIndices.Num() >= VertCount * 4)
+	{
+		const auto& BoneTransforms = Animator->GetBoneLocalTransforms();
+		const int32 BoneCount = BoneTransforms.Num();
+
+		// Build component-space bone matrices from local transforms
+		TArray<FMatrix> BoneMatrices;
+		BoneMatrices.SetNum(BoneCount);
+		for (int32 i = 0; i < BoneCount; ++i)
+		{
+			FMatrix Local = BoneTransforms[i].ToMatrixWithScale();
+			int32 ParentIdx = (i < MD.Bones.Num()) ? MD.Bones[i].ParentIndex : -1;
+			if (ParentIdx >= 0 && ParentIdx < BoneCount)
+				BoneMatrices[i] = Local * BoneMatrices[ParentIdx];
+			else
+				BoneMatrices[i] = Local;
+		}
+
+		SkinnedPositions.SetNumUninitialized(VertCount);
+		SkinnedNormals.SetNumUninitialized(VertCount);
+
+		for (int32 v = 0; v < VertCount; ++v)
+		{
+			FVector4 SrcPos(MD.Positions[v].X, MD.Positions[v].Y, MD.Positions[v].Z, 1.f);
+			FVector4 SrcNrm(MD.Normals[v].X, MD.Normals[v].Y, MD.Normals[v].Z, 0.f);
+			FVector4 OutPos(0, 0, 0, 0);
+			FVector4 OutNrm(0, 0, 0, 0);
+
+			for (int32 j = 0; j < 4; ++j)
+			{
+				uint8 BIdx = MD.BoneIndices[v * 4 + j];
+				uint8 BWeight = MD.BoneWeights[v * 4 + j];
+				if (BWeight == 0 || BIdx >= BoneCount) continue;
+
+				float W = BWeight / 255.f;
+				OutPos += BoneMatrices[BIdx].TransformFVector4(SrcPos) * W;
+				OutNrm += BoneMatrices[BIdx].TransformFVector4(SrcNrm) * W;
+			}
+
+			SkinnedPositions[v] = FVector3f(OutPos.X, OutPos.Y, OutPos.Z);
+			SkinnedNormals[v] = FVector3f(OutNrm.X, OutNrm.Y, OutNrm.Z);
+		}
+	}
+
+	const TArray<FVector3f>& Positions = SkinnedPositions.Num() > 0 ? SkinnedPositions : MD.Positions;
+	const TArray<FVector3f>& Normals = SkinnedNormals.Num() > 0 ? SkinnedNormals : MD.Normals;
+
 	TArray<uint32> Resolved;
 	Resolved.SetNumUninitialized(NumTriIndices);
 	for (int32 i = 0; i < NumTriIndices; ++i)
@@ -306,7 +356,7 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 	for (int32 i = 0; i < VertCount; ++i)
 	{
 		FVertexID VID = MeshDesc.CreateVertex();
-		Attributes.GetVertexPositions()[VID] = MD.Positions[i];
+		Attributes.GetVertexPositions()[VID] = Positions[i];
 	}
 
 	TVertexInstanceAttributesRef<FVector3f> InstNormals = Attributes.GetVertexInstanceNormals();
@@ -327,8 +377,8 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 			FVertexInstanceID VIID = MeshDesc.CreateVertexInstance(FVertexID(VI));
 			Corners[C] = VIID;
 
-			if (static_cast<int32>(VI) < MD.Normals.Num())
-				InstNormals[VIID] = MD.Normals[VI];
+			if (static_cast<int32>(VI) < Normals.Num())
+				InstNormals[VIID] = Normals[VI];
 			if (static_cast<int32>(VI) < MD.UVs.Num())
 				InstUVs.Set(VIID, 0, MD.UVs[VI]);
 		}
@@ -486,18 +536,32 @@ void SWowModelPreview::ApplyCreatureDisplay(const FWowCreatureDisplay& Display)
 
 void SWowModelPreview::TickAnimation(float DeltaSeconds)
 {
-	if (!Animator) return;
+	if (!Animator || Animator->bPaused) return;
+
+	int32 PrevFrame = Animator->GetCurrentFrame();
 	Animator->Update(DeltaSeconds);
+	int32 CurrFrame = Animator->GetCurrentFrame();
+
+	if (CurrFrame != PrevFrame)
+		RebuildMesh();
 }
 
 void SWowModelPreview::PlayAnimation(int32 AnimIndex)
 {
-	if (Animator) Animator->PlayAnimation(AnimIndex);
+	if (Animator)
+	{
+		Animator->PlayAnimation(AnimIndex);
+		RebuildMesh();
+	}
 }
 
 void SWowModelPreview::StopAnimation()
 {
-	if (Animator) Animator->StopAnimation();
+	if (Animator)
+	{
+		Animator->StopAnimation();
+		RebuildMesh();
+	}
 }
 
 void SWowModelPreview::SetAnimationPaused(bool bPaused)
@@ -507,12 +571,20 @@ void SWowModelPreview::SetAnimationPaused(bool bPaused)
 
 void SWowModelPreview::SetAnimationFrame(int32 Frame)
 {
-	if (Animator) Animator->SetFrame(Frame);
+	if (Animator)
+	{
+		Animator->SetFrame(Frame);
+		RebuildMesh();
+	}
 }
 
 void SWowModelPreview::StepAnimationFrame(int32 Delta)
 {
-	if (Animator) Animator->StepFrame(Delta);
+	if (Animator)
+	{
+		Animator->StepFrame(Delta);
+		RebuildMesh();
+	}
 }
 
 int32 SWowModelPreview::GetAnimationFrame() const

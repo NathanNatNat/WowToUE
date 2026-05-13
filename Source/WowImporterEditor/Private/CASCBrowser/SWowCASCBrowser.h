@@ -97,6 +97,11 @@ private:
 	TSharedPtr<SListView<TSharedPtr<FWowCreatureDisplay>>> SkinListView;
 	TArray<TSharedPtr<FWowCreatureDisplay>> CreatureDisplays;
 
+	// Animation controls
+	FWowM2ModelData CurrentModelData;
+	TArray<TSharedPtr<FWowAnimationInfo>> AnimationList;
+	TSharedPtr<FWowAnimationInfo> SelectedAnimation;
+
 	// State
 	TArray<FTabDef> TabDefs;
 	TArray<TSharedPtr<FWowFileEntry>> FileEntries;
