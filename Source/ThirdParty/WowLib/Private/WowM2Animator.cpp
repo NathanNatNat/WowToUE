@@ -520,33 +520,28 @@ void FWowM2Animator::CalcAllBones()
 			Mat4Copy(CompMat, local_mat);
 		}
 
-		// Build FTransform directly from sampled T/R/S (identity ref pose)
-		// local_mat transforms v to: R*S*(v-P) + T + P
-		// As FTransform(R, effectiveTrans, S): effectiveTrans = P + T - R.RotateVector(S*P)
-		// No animation data → identity (vertex stays at model-space position)
+		// Output bone-local animated transform for UE's BoneSpaceTransforms
+		// RefBonePose has pivot offsets. BoneSpaceTransforms = pivot offset + animation.
+		// At rest (no animation data), output the pivot offset (= ref pose).
+		// With animation, output: rotation + (pivot offset + anim translation) + scale.
 		{
-			FVector WL_T = bHasTrans ? SampleVec3(Idx, 0, EffAnimIdx, EffTimeMs, FVector::ZeroVector) : FVector::ZeroVector;
-			FQuat WL_Q = bHasRot ? SampleQuat(Idx, EffAnimIdx, EffTimeMs) : FQuat(0, 0, 0, 1);
-			FVector WL_S = FVector::OneVector;
-			if (bHasScale || bHasScaleFallback)
-			{
-				int32 ScaleAnimIdx = bHasScale ? EffAnimIdx : 0;
-				float ScaleTime = bHasScale ? EffTimeMs : 0.f;
-				WL_S = SampleVec3(Idx, 1, ScaleAnimIdx, ScaleTime, FVector::OneVector);
-			}
+			FVector PivotOffset = (Idx < UEPivots.Num()) ? UEPivots[Idx] : FVector::ZeroVector;
+			FVector ParentPivot = (ParentIdx >= 0 && ParentIdx < UEPivots.Num()) ? UEPivots[ParentIdx] : FVector::ZeroVector;
+			FVector LocalPivotOffset = PivotOffset - ParentPivot;
 
 			if (bHasTrans || bHasRot || bHasScale || bHasScaleFallback)
 			{
-				// WL pivot (raw WowLib space)
-				FVector WL_P(Px, Py, Pz);
+				FVector WL_T = bHasTrans ? SampleVec3(Idx, 0, EffAnimIdx, EffTimeMs, FVector::ZeroVector) : FVector::ZeroVector;
+				FQuat WL_Q = bHasRot ? SampleQuat(Idx, EffAnimIdx, EffTimeMs) : FQuat(0,0,0,1);
+				FVector WL_S = FVector::OneVector;
+				if (bHasScale || bHasScaleFallback)
+				{
+					int32 ScaleAnimIdx = bHasScale ? EffAnimIdx : 0;
+					float ScaleTime = bHasScale ? EffTimeMs : 0.f;
+					WL_S = SampleVec3(Idx, 1, ScaleAnimIdx, ScaleTime, FVector::OneVector);
+				}
 
-				// Effective translation in WL: P + T - R.Rotate(S*P)
-				FVector ScaledP(WL_S.X * WL_P.X, WL_S.Y * WL_P.Y, WL_S.Z * WL_P.Z);
-				FVector RotScaledP = WL_Q.RotateVector(ScaledP);
-				FVector WL_EffTrans = WL_P + WL_T - RotScaledP;
-
-				// Convert each component to UE space
-				FVector UE_Trans = WowLibToUE_Translation(WL_EffTrans.X, WL_EffTrans.Y, WL_EffTrans.Z);
+				FVector UE_Trans = LocalPivotOffset + WowLibToUE_Translation(WL_T.X, WL_T.Y, WL_T.Z);
 				FQuat UE_Rot = WowLibToUE_Rotation(WL_Q.X, WL_Q.Y, WL_Q.Z, WL_Q.W);
 				FVector UE_Scale = WowLibToUE_Scale(WL_S.X, WL_S.Y, WL_S.Z);
 
@@ -554,7 +549,8 @@ void FWowM2Animator::CalcAllBones()
 			}
 			else
 			{
-				BoneLocalTransforms[Idx] = FTransform::Identity;
+				// No animation — use rest pose (pivot offset only)
+				BoneLocalTransforms[Idx] = FTransform(FQuat::Identity, LocalPivotOffset);
 			}
 		}
 

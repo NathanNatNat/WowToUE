@@ -357,8 +357,13 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 			else
 				Info.ParentIndex = 0;
 
-			// DEBUG: Try identity ref pose to verify mesh rendering
-			SkMod.Add(Info, FTransform::Identity, true);
+			// Bone pose = pivot position relative to parent (in UE space)
+			FVector MyPivot = (i < MD.Bones.Num()) ? FVector(MD.Bones[i].Pivot) : FVector::ZeroVector;
+			FVector ParentPivot = (Info.ParentIndex >= 0 && Info.ParentIndex < MD.Bones.Num())
+				? FVector(MD.Bones[Info.ParentIndex].Pivot) : FVector::ZeroVector;
+			FTransform BonePose(FQuat::Identity, MyPivot - ParentPivot);
+
+			SkMod.Add(Info, BonePose, true);
 		}
 	}
 
@@ -495,7 +500,7 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 	MeshComponent->SetSkinnedAssetAndUpdate(PreviewMesh);
 	PreviewScene->AddComponent(MeshComponent, FTransform(WowOrient));
 
-	// Identity ref pose — no initialization needed, mesh component defaults to identity
+	UpdateBoneTransforms();
 
 	if (bFitCamera && ViewportClient.IsValid())
 	{
@@ -522,35 +527,25 @@ void SWowModelPreview::UpdateBoneTransforms()
 
 void SWowModelPreview::DrawBones(FPrimitiveDrawInterface* PDI)
 {
-	if (!bShowBones || !MeshComponent || !PDI || !PreviewMesh) return;
+	if (!bShowBones || !MeshComponent || !PDI) return;
 
 	const int32 NumBones = MeshComponent->GetNumBones();
-	const FReferenceSkeleton& RefSkel = PreviewMesh->GetRefSkeleton();
-
-	// Build component-space bone positions from BoneSpaceTransforms
-	TArray<FTransform> CompSpace;
-	CompSpace.SetNum(NumBones);
-	for (int32 i = 0; i < NumBones; ++i)
-	{
-		int32 ParentIdx = RefSkel.GetParentIndex(i);
-		if (ParentIdx >= 0)
-			CompSpace[i] = MeshComponent->BoneSpaceTransforms[i] * CompSpace[ParentIdx];
-		else
-			CompSpace[i] = MeshComponent->BoneSpaceTransforms[i];
-	}
-
-	// Apply component transform to get world positions
-	FTransform CompTransform = MeshComponent->GetComponentTransform();
+	const FTransform CompTransform = MeshComponent->GetComponentTransform();
 
 	for (int32 i = 0; i < NumBones; ++i)
 	{
-		FVector BonePos = (CompSpace[i] * CompTransform).GetLocation();
+		FTransform BoneTransform = MeshComponent->GetBoneTransform(i);
+		FVector BonePos = BoneTransform.GetLocation();
+
+		// Draw bone point
 		PDI->DrawPoint(BonePos, FLinearColor::Yellow, 4.0f, SDPG_Foreground);
 
-		int32 ParentIdx = RefSkel.GetParentIndex(i);
+		// Draw line to parent
+		int32 ParentIdx = (i < CurrentModelData.Bones.Num()) ? CurrentModelData.Bones[i].ParentIndex : -1;
 		if (ParentIdx >= 0 && ParentIdx < NumBones)
 		{
-			FVector ParentPos = (CompSpace[ParentIdx] * CompTransform).GetLocation();
+			FTransform ParentTransform = MeshComponent->GetBoneTransform(ParentIdx);
+			FVector ParentPos = ParentTransform.GetLocation();
 			PDI->DrawLine(ParentPos, BonePos, FLinearColor::Green, SDPG_Foreground);
 		}
 	}
@@ -644,14 +639,9 @@ void SWowModelPreview::PlayAnimation(int32 AnimIndex)
 
 void SWowModelPreview::StopAnimation()
 {
-	if (!Animator || !MeshComponent) return;
+	if (!Animator) return;
 	Animator->StopAnimation();
-
-	// Reset to identity (ref pose is identity)
-	const int32 NumBones = MeshComponent->GetNumBones();
-	for (int32 i = 0; i < NumBones; ++i)
-		MeshComponent->BoneSpaceTransforms[i] = FTransform::Identity;
-	MeshComponent->RefreshBoneTransforms();
+	UpdateBoneTransforms();
 }
 
 void SWowModelPreview::SetAnimationPaused(bool bPaused)
