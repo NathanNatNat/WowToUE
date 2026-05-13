@@ -6,6 +6,8 @@
 #include "3D/loaders/M2Generics.h"
 #include "3D/Skin.h"
 #include "3D/Texture.h"
+#include "3D/BoneMapper.h"
+#include "3D/AnimMapper.h"
 #include "db/caches/DBCreatures.h"
 #include "casc/listfile.h"
 
@@ -144,7 +146,7 @@ static void ApplyRestPoseSkinning(M2Loader& Loader)
 	}
 }
 
-bool FWowM2Loader::LoadM2(uint32 FileDataID, FWowM2ModelData& OutModel, FString& OutError)
+bool FWowM2Loader::LoadM2(uint32 FileDataID, FWowM2ModelData& OutModel, TSharedPtr<BufferWrapper>& OutBuffer, TSharedPtr<M2Loader>& OutLoader, FString& OutError)
 {
 	if (!FWowCASCInterface::Get().IsLoaded())
 	{
@@ -154,18 +156,16 @@ bool FWowM2Loader::LoadM2(uint32 FileDataID, FWowM2ModelData& OutModel, FString&
 
 	try
 	{
-		BufferWrapper Buf = FWowCASCInterface::Get().GetFileData(FileDataID);
-		M2Loader Loader(Buf);
-		Loader.load().get();
+		auto LoaderBuf = MakeShared<BufferWrapper>(FWowCASCInterface::Get().GetFileData(FileDataID));
+		auto LoaderPtr = MakeShared<M2Loader>(*LoaderBuf);
+		LoaderPtr->load().get();
+		auto& Loader = *LoaderPtr;
 
 		OutModel.FileDataID = FileDataID;
 		OutModel.Name = UTF8_TO_TCHAR(Loader.name.c_str());
 		OutModel.BoneCount = static_cast<uint32>(Loader.bones.size());
 		OutModel.AnimationCount = static_cast<uint32>(Loader.animations.size());
 		OutModel.SkinCount = Loader.viewCount;
-
-		// Apply rest-pose bone transforms (hides animation ghost meshes)
-		ApplyRestPoseSkinning(Loader);
 
 		// WoW -> UE coordinate transform (verified working for M2 models):
 		// UE.X(forward) = -WoW.Y, UE.Y(right) = WoW.X, UE.Z(up) = WoW.Z
@@ -256,10 +256,49 @@ bool FWowM2Loader::LoadM2(uint32 FileDataID, FWowM2ModelData& OutModel, FString&
 			OutModel.Textures.Add(Ref);
 		}
 
+		// Bones
+		for (size_t i = 0; i < Loader.bones.size(); ++i)
+		{
+			const auto& B = Loader.bones[i];
+			FWowBoneData Bone;
+			std::string BName = get_bone_name(B.boneID, static_cast<int>(i), B.boneNameCRC);
+			Bone.BoneName = FName(UTF8_TO_TCHAR(BName.c_str()));
+			Bone.ParentIndex = B.parentBone;
+			Bone.BoneID = B.boneID;
+			if (B.pivot.size() >= 3)
+				Bone.Pivot = FVector3f(B.pivot[2] * 100.f, B.pivot[0] * 100.f, B.pivot[1] * 100.f);
+			OutModel.Bones.Add(Bone);
+		}
+
+		// Animations
+		for (size_t i = 0; i < Loader.animations.size(); ++i)
+		{
+			const auto& A = Loader.animations[i];
+			FWowAnimationInfo Anim;
+			Anim.AnimIndex = static_cast<int32>(i);
+			Anim.AnimID = A.id;
+			Anim.VariationIndex = A.variationIndex;
+			Anim.DurationMs = A.duration;
+			std::string AName = get_anim_name(A.id);
+			Anim.Label = FString::Printf(TEXT("%s (%u.%u)"), UTF8_TO_TCHAR(AName.c_str()), A.id, A.variationIndex);
+			OutModel.Animations.Add(Anim);
+
+			if (A.id == 15 && OutModel.HandsClosedAnimIndex < 0)
+				OutModel.HandsClosedAnimIndex = static_cast<int32>(i);
+		}
+
+		// Bone weights and indices (4 per vertex)
+		if (!Loader.boneWeights.empty())
+			OutModel.BoneWeights.Append(Loader.boneWeights.data(), Loader.boneWeights.size());
+		if (!Loader.boneIndices.empty())
+			OutModel.BoneIndices.Append(Loader.boneIndices.data(), Loader.boneIndices.size());
+
 		UE_LOG(LogWowM2, Log, TEXT("LoadM2(%u): %s — %d verts, %d tris, %d bones, %d anims, %d textures"),
 			FileDataID, *OutModel.Name, OutModel.VertexCount, OutModel.TriangleCount,
 			OutModel.BoneCount, OutModel.AnimationCount, OutModel.Textures.Num());
 
+		OutBuffer = LoaderBuf;
+		OutLoader = LoaderPtr;
 		return true;
 	}
 	catch (const std::exception& e)

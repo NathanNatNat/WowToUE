@@ -690,9 +690,11 @@ void SWowCASCBrowser::PreviewM2(uint32 FileDataID, const FString& FileName)
 	{
 		auto ModelDataPtr = MakeShared<FWowM2ModelData>();
 		auto DisplaysPtr = MakeShared<TArray<FWowCreatureDisplay>>();
+		TSharedPtr<BufferWrapper> BufPtr;
+		TSharedPtr<M2Loader> LoaderPtr;
 		FString Error;
 
-		bool bSuccess = FWowM2Loader::LoadM2(FileDataID, *ModelDataPtr, Error);
+		bool bSuccess = FWowM2Loader::LoadM2(FileDataID, *ModelDataPtr, BufPtr, LoaderPtr, Error);
 
 		if (bSuccess)
 		{
@@ -705,7 +707,7 @@ void SWowCASCBrowser::PreviewM2(uint32 FileDataID, const FString& FileName)
 				FileDataID, bDisplaySuccess, DisplaysPtr->Num(), *DisplayError);
 		}
 
-		AsyncTask(ENamedThreads::GameThread, [this, bSuccess, ModelDataPtr, DisplaysPtr, FileName, Error]()
+		AsyncTask(ENamedThreads::GameThread, [this, bSuccess, ModelDataPtr, DisplaysPtr, BufPtr, LoaderPtr, FileName, Error]()
 		{
 			if (!bSuccess)
 			{
@@ -715,7 +717,9 @@ void SWowCASCBrowser::PreviewM2(uint32 FileDataID, const FString& FileName)
 
 			PreviewImage->SetVisibility(EVisibility::Collapsed);
 			ModelPreview->SetVisibility(EVisibility::Visible);
-			ModelPreview->SetM2Model(*ModelDataPtr);
+			CachedM2Buffer = BufPtr;
+			CachedM2Loader = LoaderPtr;
+			ModelPreview->SetM2Model(*ModelDataPtr, LoaderPtr.Get());
 
 			CreatureDisplays.Empty();
 			for (auto& D : *DisplaysPtr)

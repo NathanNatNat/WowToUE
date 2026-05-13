@@ -11,6 +11,9 @@
 
 #include "CoreMinimal.h"
 
+class BufferWrapper;
+class M2Loader;
+
 struct WOWLIB_API FWowSubMeshData
 {
 	uint16 SubmeshID;
@@ -29,6 +32,23 @@ struct WOWLIB_API FWowTextureRef
 	FString FileName;
 };
 
+struct WOWLIB_API FWowBoneData
+{
+	FName BoneName;
+	int32 ParentIndex = -1;
+	FVector3f Pivot;
+	int32 BoneID = -1;
+};
+
+struct WOWLIB_API FWowAnimationInfo
+{
+	int32 AnimIndex = 0;
+	uint16 AnimID = 0;
+	uint16 VariationIndex = 0;
+	uint32 DurationMs = 0;
+	FString Label;
+};
+
 struct WOWLIB_API FWowM2ModelData
 {
 	uint32 FileDataID = 0;
@@ -42,6 +62,11 @@ struct WOWLIB_API FWowM2ModelData
 	TArray<FWowSubMeshData> SubMeshes;
 	TArray<FWowTextureRef> Textures;
 	TArray<uint16> TextureCombos;
+	TArray<FWowBoneData> Bones;
+	TArray<FWowAnimationInfo> Animations;
+	TArray<uint8> BoneWeights;
+	TArray<uint8> BoneIndices;
+	int32 HandsClosedAnimIndex = -1;
 	uint32 VertexCount = 0;
 	uint32 TriangleCount = 0;
 	uint32 BoneCount = 0;
@@ -62,7 +87,7 @@ struct WOWLIB_API FWowCreatureDisplay
 class WOWLIB_API FWowM2Loader
 {
 public:
-	static bool LoadM2(uint32 FileDataID, FWowM2ModelData& OutModel, FString& OutError);
+	static bool LoadM2(uint32 FileDataID, FWowM2ModelData& OutModel, TSharedPtr<BufferWrapper>& OutBuffer, TSharedPtr<M2Loader>& OutLoader, FString& OutError);
 	static bool ResolveCreatureTextures(FWowM2ModelData& Model, FString& OutError);
 	static bool GetCreatureDisplays(uint32 M2FileDataID, TArray<FWowCreatureDisplay>& OutDisplays, FString& OutError);
 };

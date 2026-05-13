@@ -1,5 +1,6 @@
 #include "CASCBrowser/SWowModelPreview.h"
 #include "WowCASCInterface.h"
+#include "WowM2Animator.h"
 #include "AdvancedPreviewScene.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
@@ -22,6 +23,7 @@ void FWowModelPreviewClient::Tick(float DeltaSeconds)
 {
 	FEditorViewportClient::Tick(DeltaSeconds);
 	PreviewScene->GetWorld()->Tick(LEVELTICK_All, DeltaSeconds);
+	if (OnTick) OnTick(DeltaSeconds);
 }
 
 void SWowModelPreview::Construct(const FArguments& InArgs)
@@ -37,6 +39,7 @@ void SWowModelPreview::Construct(const FArguments& InArgs)
 SWowModelPreview::~SWowModelPreview()
 {
 	ClearModel();
+	Animator.Reset();
 	if (ViewportClient.IsValid())
 	{
 		ViewportClient->Viewport = nullptr;
@@ -46,6 +49,7 @@ SWowModelPreview::~SWowModelPreview()
 TSharedRef<FEditorViewportClient> SWowModelPreview::MakeEditorViewportClient()
 {
 	ViewportClient = MakeShareable(new FWowModelPreviewClient(*PreviewScene, SharedThis(this)));
+	ViewportClient->OnTick = [this](float DeltaSeconds) { TickAnimation(DeltaSeconds); };
 	return ViewportClient.ToSharedRef();
 }
 
@@ -61,6 +65,7 @@ void SWowModelPreview::ClearModel()
 	SubMeshIDs.Empty();
 	SubMeshLabels.Empty();
 	CurrentModelData = FWowM2ModelData();
+	Animator.Reset();
 }
 
 DEFINE_LOG_CATEGORY_STATIC(LogWowPreview, Log, All);
@@ -207,10 +212,16 @@ UMaterial* SWowModelPreview::CreateUnlitMaterial(UTexture2D* Texture, uint16 Ble
 	return Mat;
 }
 
-void SWowModelPreview::SetM2Model(const FWowM2ModelData& ModelData)
+void SWowModelPreview::SetM2Model(const FWowM2ModelData& ModelData, M2Loader* InLoader)
 {
 	ClearModel();
 	CurrentModelData = ModelData;
+
+	if (InLoader)
+	{
+		Animator = MakeShared<FWowM2Animator>();
+		Animator->Initialize(InLoader);
+	}
 
 	if (ModelData.Positions.Num() == 0 || ModelData.Triangles.Num() == 0)
 		return;
@@ -471,4 +482,50 @@ void SWowModelPreview::ApplyCreatureDisplay(const FWowCreatureDisplay& Display)
 	}
 
 	RebuildMesh();
+}
+
+void SWowModelPreview::TickAnimation(float DeltaSeconds)
+{
+	if (!Animator) return;
+	Animator->Update(DeltaSeconds);
+}
+
+void SWowModelPreview::PlayAnimation(int32 AnimIndex)
+{
+	if (Animator) Animator->PlayAnimation(AnimIndex);
+}
+
+void SWowModelPreview::StopAnimation()
+{
+	if (Animator) Animator->StopAnimation();
+}
+
+void SWowModelPreview::SetAnimationPaused(bool bPaused)
+{
+	if (Animator) Animator->bPaused = bPaused;
+}
+
+void SWowModelPreview::SetAnimationFrame(int32 Frame)
+{
+	if (Animator) Animator->SetFrame(Frame);
+}
+
+void SWowModelPreview::StepAnimationFrame(int32 Delta)
+{
+	if (Animator) Animator->StepFrame(Delta);
+}
+
+int32 SWowModelPreview::GetAnimationFrame() const
+{
+	return Animator ? Animator->GetCurrentFrame() : 0;
+}
+
+int32 SWowModelPreview::GetAnimationFrameCount() const
+{
+	return Animator ? Animator->GetFrameCount() : 0;
+}
+
+bool SWowModelPreview::IsAnimationPaused() const
+{
+	return Animator ? Animator->bPaused : false;
 }

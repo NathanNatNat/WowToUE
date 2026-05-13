@@ -29,6 +29,7 @@ public class WowImporterEditor : ModuleRules
 				"InputCore",
 				"MeshDescription",
 				"StaticMeshDescription",
+				"SkeletalMeshDescription",
 				"HTTP",
 				"WorkspaceMenuStructure",
 				"DesktopPlatform",

@@ -8,6 +8,8 @@
 #include "WowM2Loader.h"
 
 class SWowModelPreview;
+class M2Loader;
+class BufferWrapper;
 
 class SWowCASCBrowser : public SCompoundWidget
 {
@@ -88,6 +90,8 @@ private:
 	UTexture2D* PreviewTexture = nullptr;
 	TSharedPtr<STextBlock> ListStatusText;
 	TSharedPtr<SHorizontalBox> QuickFilterBar;
+	TSharedPtr<BufferWrapper> CachedM2Buffer;
+	TSharedPtr<M2Loader> CachedM2Loader;
 	TSharedPtr<SVerticalBox> GeosetPanel;
 	TSharedPtr<SVerticalBox> GeosetCheckboxList;
 	TSharedPtr<SListView<TSharedPtr<FWowCreatureDisplay>>> SkinListView;
