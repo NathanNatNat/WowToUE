@@ -2,10 +2,10 @@
 
 An Unreal Engine 5.7 editor plugin for browsing and previewing World of Warcraft game assets from a local WoW installation.
 
-![Build Selection](Docs/Screenshots/build_select.png)
-![File Browser](Docs/Screenshots/file_browser.png)
-![Model Preview](Docs/Screenshots/model_preview.png)
-![Model Animated with Bones](Docs/Screenshots/model_animated.png)
+| | |
+|---|---|
+| ![Build Selection](Docs/Screenshots/build_select.png) | ![File Browser](Docs/Screenshots/file_browser.png) |
+| ![Model Preview](Docs/Screenshots/model_preview.png) | ![Model Animated](Docs/Screenshots/model_animated.png) |
 
 ## Current Features
 
