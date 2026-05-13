@@ -520,22 +520,42 @@ void FWowM2Animator::CalcAllBones()
 			Mat4Copy(CompMat, local_mat);
 		}
 
-		// Convert local_mat (WowLib column-major) to UE FTransform
-		// Formula: UE_row[r][c] = WL_colmaj[P[r]*4 + P[c]] for 3x3 rotation block
-		// where P={2,0,1} maps WL axes {x,y,z} → UE axes {z,x,y}
+		// Build FTransform directly from sampled T/R/S (identity ref pose)
+		// local_mat transforms v to: R*S*(v-P) + T + P
+		// As FTransform(R, effectiveTrans, S): effectiveTrans = P + T - R.RotateVector(S*P)
+		// No animation data → identity (vertex stays at model-space position)
 		{
-			static const int32 P[3] = { 2, 0, 1 };
-			FMatrix UE_Local = FMatrix::Identity;
-			for (int32 r = 0; r < 3; ++r)
-				for (int32 c = 0; c < 3; ++c)
-					UE_Local.M[r][c] = local_mat[P[r] * 4 + P[c]];
+			FVector WL_T = bHasTrans ? SampleVec3(Idx, 0, EffAnimIdx, EffTimeMs, FVector::ZeroVector) : FVector::ZeroVector;
+			FQuat WL_Q = bHasRot ? SampleQuat(Idx, EffAnimIdx, EffTimeMs) : FQuat(0, 0, 0, 1);
+			FVector WL_S = FVector::OneVector;
+			if (bHasScale || bHasScaleFallback)
+			{
+				int32 ScaleAnimIdx = bHasScale ? EffAnimIdx : 0;
+				float ScaleTime = bHasScale ? EffTimeMs : 0.f;
+				WL_S = SampleVec3(Idx, 1, ScaleAnimIdx, ScaleTime, FVector::OneVector);
+			}
 
-			FVector UE_Trans = WowLibToUE_Translation(local_mat[12], local_mat[13], local_mat[14]);
-			UE_Local.M[3][0] = UE_Trans.X;
-			UE_Local.M[3][1] = UE_Trans.Y;
-			UE_Local.M[3][2] = UE_Trans.Z;
+			if (bHasTrans || bHasRot || bHasScale || bHasScaleFallback)
+			{
+				// WL pivot (raw WowLib space)
+				FVector WL_P(Px, Py, Pz);
 
-			BoneLocalTransforms[Idx] = FTransform(UE_Local);
+				// Effective translation in WL: P + T - R.Rotate(S*P)
+				FVector ScaledP(WL_S.X * WL_P.X, WL_S.Y * WL_P.Y, WL_S.Z * WL_P.Z);
+				FVector RotScaledP = WL_Q.RotateVector(ScaledP);
+				FVector WL_EffTrans = WL_P + WL_T - RotScaledP;
+
+				// Convert each component to UE space
+				FVector UE_Trans = WowLibToUE_Translation(WL_EffTrans.X, WL_EffTrans.Y, WL_EffTrans.Z);
+				FQuat UE_Rot = WowLibToUE_Rotation(WL_Q.X, WL_Q.Y, WL_Q.Z, WL_Q.W);
+				FVector UE_Scale = WowLibToUE_Scale(WL_S.X, WL_S.Y, WL_S.Z);
+
+				BoneLocalTransforms[Idx] = FTransform(UE_Rot, UE_Trans, UE_Scale);
+			}
+			else
+			{
+				BoneLocalTransforms[Idx] = FTransform::Identity;
+			}
 		}
 
 		BoneCalculated[Idx] = true;
