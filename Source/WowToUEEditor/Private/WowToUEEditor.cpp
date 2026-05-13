@@ -15,8 +15,8 @@ void FWowToUEEditorModule::StartupModule()
 	FGlobalTabmanager::Get()->RegisterNomadTabSpawner(
 		CASCBrowserTabId,
 		FOnSpawnTab::CreateRaw(this, &FWowToUEEditorModule::SpawnCASCBrowserTab))
-		.SetDisplayName(LOCTEXT("CASCBrowserTabTitle", "WoW CASC Browser"))
-		.SetTooltipText(LOCTEXT("CASCBrowserTabTooltip", "Browse and import World of Warcraft assets"))
+		.SetDisplayName(LOCTEXT("CASCBrowserTabTitle", "WowToUE"))
+		.SetTooltipText(LOCTEXT("CASCBrowserTabTooltip", "Browse and preview World of Warcraft assets"))
 		.SetGroup(WorkspaceMenu::GetMenuStructure().GetToolsCategory());
 
 	UToolMenus::RegisterStartupCallback(FSimpleMulticastDelegate::FDelegate::CreateLambda([]()
@@ -25,8 +25,8 @@ void FWowToUEEditorModule::StartupModule()
 		FToolMenuSection& Section = Menu->FindOrAddSection("WowToUE");
 		Section.AddMenuEntry(
 			"OpenCASCBrowser",
-			LOCTEXT("MenuEntryLabel", "WoW CASC Browser"),
-			LOCTEXT("MenuEntryTooltip", "Open the World of Warcraft CASC asset browser"),
+			LOCTEXT("MenuEntryLabel", "WowToUE"),
+			LOCTEXT("MenuEntryTooltip", "Browse and preview World of Warcraft assets"),
 			FSlateIcon(),
 			FUIAction(FExecuteAction::CreateLambda([]()
 			{
