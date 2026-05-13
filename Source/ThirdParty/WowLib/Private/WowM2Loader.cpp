@@ -3,12 +3,146 @@
 #include "Logging/LogMacros.h"
 
 #include "3D/loaders/M2Loader.h"
+#include "3D/loaders/M2Generics.h"
 #include "3D/Skin.h"
 #include "3D/Texture.h"
 #include "db/caches/DBCreatures.h"
 #include "casc/listfile.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogWowM2, Log, All);
+
+static void ApplyRestPoseSkinning(M2Loader& Loader)
+{
+	const auto& Bones = Loader.bones;
+	if (Bones.empty() || Loader.boneWeights.empty() || Loader.boneIndices.empty())
+		return;
+
+	const int32 BoneCount = static_cast<int32>(Bones.size());
+	const uint32 VertCount = static_cast<uint32>(Loader.vertices.size() / 3);
+
+	// Calculate rest-pose bone matrices (animation 0, time 0)
+	TArray<FMatrix> BoneMatrices;
+	BoneMatrices.SetNum(BoneCount);
+	TArray<bool> Calculated;
+	Calculated.Init(false, BoneCount);
+
+	// Recursive bone calculation matching wow.export's calc_bone
+	TFunction<void(int32)> CalcBone = [&](int32 Idx)
+	{
+		if (Idx < 0 || Idx >= BoneCount || Calculated[Idx])
+			return;
+
+		const auto& Bone = Bones[Idx];
+
+		if (Bone.parentBone >= 0 && Bone.parentBone < BoneCount)
+			CalcBone(Bone.parentBone);
+
+		float Px = Bone.pivot[0], Py = Bone.pivot[1], Pz = Bone.pivot[2];
+
+		// Sample first keyframe of animation 0 (rest pose)
+		auto SampleVec3 = [](const M2Track& Track, float DefX, float DefY, float DefZ, float* Out)
+		{
+			if (!Track.values.empty() && !Track.values[0].empty())
+			{
+				const auto* Vec = std::get_if<std::vector<float>>(&Track.values[0][0]);
+				if (Vec && Vec->size() >= 3) { Out[0] = (*Vec)[0]; Out[1] = (*Vec)[1]; Out[2] = (*Vec)[2]; return; }
+			}
+			Out[0] = DefX; Out[1] = DefY; Out[2] = DefZ;
+		};
+
+		auto SampleQuat = [](const M2Track& Track, float* Out)
+		{
+			if (!Track.values.empty() && !Track.values[0].empty())
+			{
+				const auto* Vec = std::get_if<std::vector<float>>(&Track.values[0][0]);
+				if (Vec && Vec->size() >= 4) { Out[0] = (*Vec)[0]; Out[1] = (*Vec)[1]; Out[2] = (*Vec)[2]; Out[3] = (*Vec)[3]; return; }
+			}
+			Out[0] = 0.f; Out[1] = 0.f; Out[2] = 0.f; Out[3] = 1.f;
+		};
+
+		bool bHasTrans = !Bone.translation.values.empty() && !Bone.translation.values[0].empty();
+		bool bHasRot = !Bone.rotation.values.empty() && !Bone.rotation.values[0].empty();
+		bool bHasScale = !Bone.scale.values.empty() && !Bone.scale.values[0].empty();
+
+		FMatrix LocalMat = FMatrix::Identity;
+
+		if (bHasTrans || bHasRot || bHasScale)
+		{
+			// UE row-vector convention: v * T(-pivot) * S * R * T(anim) * T(pivot)
+			FMatrix Result = FTranslationMatrix(FVector(-Px, -Py, -Pz));
+
+			if (bHasScale)
+			{
+				float S[3];
+				SampleVec3(Bone.scale, 1, 1, 1, S);
+				Result = Result * FScaleMatrix(FVector(S[0], S[1], S[2]));
+			}
+
+			if (bHasRot)
+			{
+				float Q[4];
+				SampleQuat(Bone.rotation, Q);
+				FQuat Quat(Q[0], Q[1], Q[2], Q[3]);
+				Result = Result * FQuatRotationMatrix(Quat);
+			}
+
+			if (bHasTrans)
+			{
+				float T[3];
+				SampleVec3(Bone.translation, 0, 0, 0, T);
+				Result = Result * FTranslationMatrix(FVector(T[0], T[1], T[2]));
+			}
+
+			Result = Result * FTranslationMatrix(FVector(Px, Py, Pz));
+			LocalMat = Result;
+		}
+
+		if (Bone.parentBone >= 0 && Bone.parentBone < BoneCount)
+			BoneMatrices[Idx] = LocalMat * BoneMatrices[Bone.parentBone];
+		else
+			BoneMatrices[Idx] = LocalMat;
+
+		Calculated[Idx] = true;
+	};
+
+	for (int32 i = 0; i < BoneCount; ++i)
+		CalcBone(i);
+
+	// Apply bone transforms to vertices
+	for (uint32 v = 0; v < VertCount; ++v)
+	{
+		float Px = Loader.vertices[v * 3 + 0];
+		float Py = Loader.vertices[v * 3 + 1];
+		float Pz = Loader.vertices[v * 3 + 2];
+		float Nx = Loader.normals[v * 3 + 0];
+		float Ny = Loader.normals[v * 3 + 1];
+		float Nz = Loader.normals[v * 3 + 2];
+
+		FVector4 SrcPos(Px, Py, Pz, 1.f);
+		FVector4 SrcNrm(Nx, Ny, Nz, 0.f);
+		FVector4 OutPos(0, 0, 0, 0);
+		FVector4 OutNrm(0, 0, 0, 0);
+
+		for (int32 j = 0; j < 4; ++j)
+		{
+			uint8 BIdx = Loader.boneIndices[v * 4 + j];
+			uint8 BWeight = Loader.boneWeights[v * 4 + j];
+			if (BWeight == 0 || BIdx >= BoneCount)
+				continue;
+
+			float W = BWeight / 255.f;
+			OutPos += BoneMatrices[BIdx].TransformFVector4(SrcPos) * W;
+			OutNrm += BoneMatrices[BIdx].TransformFVector4(SrcNrm) * W;
+		}
+
+		Loader.vertices[v * 3 + 0] = OutPos.X;
+		Loader.vertices[v * 3 + 1] = OutPos.Y;
+		Loader.vertices[v * 3 + 2] = OutPos.Z;
+		Loader.normals[v * 3 + 0] = OutNrm.X;
+		Loader.normals[v * 3 + 1] = OutNrm.Y;
+		Loader.normals[v * 3 + 2] = OutNrm.Z;
+	}
+}
 
 bool FWowM2Loader::LoadM2(uint32 FileDataID, FWowM2ModelData& OutModel, FString& OutError)
 {
@@ -29,6 +163,9 @@ bool FWowM2Loader::LoadM2(uint32 FileDataID, FWowM2ModelData& OutModel, FString&
 		OutModel.BoneCount = static_cast<uint32>(Loader.bones.size());
 		OutModel.AnimationCount = static_cast<uint32>(Loader.animations.size());
 		OutModel.SkinCount = Loader.viewCount;
+
+		// Apply rest-pose bone transforms (hides animation ghost meshes)
+		ApplyRestPoseSkinning(Loader);
 
 		// WoW -> UE coordinate transform (verified working for M2 models):
 		// UE.X(forward) = -WoW.Y, UE.Y(right) = WoW.X, UE.Z(up) = WoW.Z
@@ -214,7 +351,7 @@ bool FWowM2Loader::GetCreatureDisplays(uint32 M2FileDataID, TArray<FWowCreatureD
 		if (!Displays || Displays->empty())
 			return true;
 
-		TSet<uint32> SeenPrimaryTextures;
+		TSet<FString> SeenSkinKeys;
 
 		for (const auto& DisplayRef : *Displays)
 		{
@@ -222,10 +359,16 @@ bool FWowM2Loader::GetCreatureDisplays(uint32 M2FileDataID, TArray<FWowCreatureD
 			if (D.textures.empty())
 				continue;
 
-			uint32 PrimaryTex = D.textures[0];
-			if (SeenPrimaryTextures.Contains(PrimaryTex))
+			// Dedup key = first texture filename + extraGeosets (matches wow.export JS)
+			FString SkinKey = FString::FromInt(D.textures[0]);
+			if (D.extraGeosets.has_value())
+			{
+				for (uint32_t G : D.extraGeosets.value())
+					SkinKey += FString::Printf(TEXT(",%u"), G);
+			}
+			if (SeenSkinKeys.Contains(SkinKey))
 				continue;
-			SeenPrimaryTextures.Add(PrimaryTex);
+			SeenSkinKeys.Add(SkinKey);
 
 			FWowCreatureDisplay Entry;
 			Entry.DisplayID = D.ID;
