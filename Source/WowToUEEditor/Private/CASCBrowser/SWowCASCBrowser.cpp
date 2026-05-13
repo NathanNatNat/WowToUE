@@ -24,8 +24,8 @@
 
 #define LOCTEXT_NAMESPACE "SWowCASCBrowser"
 
-static const FString WowImporterIni = GEditorPerProjectIni;
-static const TCHAR* ConfigSection = TEXT("WowImporter");
+static const FString WowToUEIni = GEditorPerProjectIni;
+static const TCHAR* ConfigSection = TEXT("WowToUE");
 
 void SWowCASCBrowser::Construct(const FArguments& InArgs)
 {
@@ -345,7 +345,7 @@ void SWowCASCBrowser::Construct(const FArguments& InArgs)
 
 	// Restore saved path
 	FString SavedPath;
-	if (GConfig->GetString(ConfigSection, TEXT("InstallPath"), SavedPath, WowImporterIni) && !SavedPath.IsEmpty())
+	if (GConfig->GetString(ConfigSection, TEXT("InstallPath"), SavedPath, WowToUEIni) && !SavedPath.IsEmpty())
 	{
 		PathInput->SetText(FText::FromString(SavedPath));
 	}
@@ -1098,8 +1098,8 @@ FReply SWowCASCBrowser::OnConnectClicked()
 		return FReply::Handled();
 	}
 
-	GConfig->SetString(ConfigSection, TEXT("InstallPath"), *Path, WowImporterIni);
-	GConfig->Flush(false, WowImporterIni);
+	GConfig->SetString(ConfigSection, TEXT("InstallPath"), *Path, WowToUEIni);
+	GConfig->Flush(false, WowToUEIni);
 
 	StatusText->SetText(LOCTEXT("Connecting", "Connecting to CASC archive..."));
 	BuildListBox->ClearChildren();
@@ -1257,55 +1257,55 @@ void SWowCASCBrowser::SortFileList()
 
 void SWowCASCBrowser::LoadSettings()
 {
-	GConfig->GetString(ConfigSection, TEXT("CDNRegion"), SettingCDNRegion, WowImporterIni);
-	GConfig->GetString(ConfigSection, TEXT("Locale"), SettingLocale, WowImporterIni);
-	GConfig->GetString(ConfigSection, TEXT("ListfileURL"), SettingListfileURL, WowImporterIni);
-	GConfig->GetString(ConfigSection, TEXT("ListfileFallbackURL"), SettingListfileFallbackURL, WowImporterIni);
-	GConfig->GetInt(ConfigSection, TEXT("ListfileRefreshDays"), SettingListfileRefreshDays, WowImporterIni);
-	GConfig->GetString(ConfigSection, TEXT("TactKeysURL"), SettingTactKeysURL, WowImporterIni);
-	GConfig->GetString(ConfigSection, TEXT("TactKeysFallbackURL"), SettingTactKeysFallbackURL, WowImporterIni);
-	GConfig->GetString(ConfigSection, TEXT("CDNFallbackHosts"), SettingCDNFallbackHosts, WowImporterIni);
-	GConfig->GetString(ConfigSection, TEXT("DBDURL"), SettingDBDURL, WowImporterIni);
-	GConfig->GetString(ConfigSection, TEXT("DBDFallbackURL"), SettingDBDFallbackURL, WowImporterIni);
-	GConfig->GetString(ConfigSection, TEXT("DBDFilenameURL"), SettingDBDFilenameURL, WowImporterIni);
-	GConfig->GetString(ConfigSection, TEXT("DBDFilenameFallbackURL"), SettingDBDFilenameFallbackURL, WowImporterIni);
-	GConfig->GetInt(ConfigSection, TEXT("CacheExpiryDays"), SettingCacheExpiryDays, WowImporterIni);
-	GConfig->GetBool(ConfigSection, TEXT("EnableM2Skins"), SettingEnableM2Skins, WowImporterIni);
-	GConfig->GetBool(ConfigSection, TEXT("EnableUnknownFiles"), SettingEnableUnknownFiles, WowImporterIni);
-	GConfig->GetBool(ConfigSection, TEXT("OverwriteFiles"), SettingOverwriteFiles, WowImporterIni);
-	GConfig->GetBool(ConfigSection, TEXT("ExportSharedTextures"), SettingExportSharedTextures, WowImporterIni);
-	GConfig->GetBool(ConfigSection, TEXT("ExportSharedChildren"), SettingExportSharedChildren, WowImporterIni);
-	GConfig->GetBool(ConfigSection, TEXT("ExportCollision"), SettingExportCollision, WowImporterIni);
-	GConfig->GetBool(ConfigSection, TEXT("ExportUV2"), SettingExportUV2, WowImporterIni);
-	GConfig->GetBool(ConfigSection, TEXT("ExportNamedFiles"), SettingExportNamedFiles, WowImporterIni);
-	GConfig->GetBool(ConfigSection, TEXT("ShowUnknownItems"), SettingShowUnknownItems, WowImporterIni);
+	GConfig->GetString(ConfigSection, TEXT("CDNRegion"), SettingCDNRegion, WowToUEIni);
+	GConfig->GetString(ConfigSection, TEXT("Locale"), SettingLocale, WowToUEIni);
+	GConfig->GetString(ConfigSection, TEXT("ListfileURL"), SettingListfileURL, WowToUEIni);
+	GConfig->GetString(ConfigSection, TEXT("ListfileFallbackURL"), SettingListfileFallbackURL, WowToUEIni);
+	GConfig->GetInt(ConfigSection, TEXT("ListfileRefreshDays"), SettingListfileRefreshDays, WowToUEIni);
+	GConfig->GetString(ConfigSection, TEXT("TactKeysURL"), SettingTactKeysURL, WowToUEIni);
+	GConfig->GetString(ConfigSection, TEXT("TactKeysFallbackURL"), SettingTactKeysFallbackURL, WowToUEIni);
+	GConfig->GetString(ConfigSection, TEXT("CDNFallbackHosts"), SettingCDNFallbackHosts, WowToUEIni);
+	GConfig->GetString(ConfigSection, TEXT("DBDURL"), SettingDBDURL, WowToUEIni);
+	GConfig->GetString(ConfigSection, TEXT("DBDFallbackURL"), SettingDBDFallbackURL, WowToUEIni);
+	GConfig->GetString(ConfigSection, TEXT("DBDFilenameURL"), SettingDBDFilenameURL, WowToUEIni);
+	GConfig->GetString(ConfigSection, TEXT("DBDFilenameFallbackURL"), SettingDBDFilenameFallbackURL, WowToUEIni);
+	GConfig->GetInt(ConfigSection, TEXT("CacheExpiryDays"), SettingCacheExpiryDays, WowToUEIni);
+	GConfig->GetBool(ConfigSection, TEXT("EnableM2Skins"), SettingEnableM2Skins, WowToUEIni);
+	GConfig->GetBool(ConfigSection, TEXT("EnableUnknownFiles"), SettingEnableUnknownFiles, WowToUEIni);
+	GConfig->GetBool(ConfigSection, TEXT("OverwriteFiles"), SettingOverwriteFiles, WowToUEIni);
+	GConfig->GetBool(ConfigSection, TEXT("ExportSharedTextures"), SettingExportSharedTextures, WowToUEIni);
+	GConfig->GetBool(ConfigSection, TEXT("ExportSharedChildren"), SettingExportSharedChildren, WowToUEIni);
+	GConfig->GetBool(ConfigSection, TEXT("ExportCollision"), SettingExportCollision, WowToUEIni);
+	GConfig->GetBool(ConfigSection, TEXT("ExportUV2"), SettingExportUV2, WowToUEIni);
+	GConfig->GetBool(ConfigSection, TEXT("ExportNamedFiles"), SettingExportNamedFiles, WowToUEIni);
+	GConfig->GetBool(ConfigSection, TEXT("ShowUnknownItems"), SettingShowUnknownItems, WowToUEIni);
 }
 
 void SWowCASCBrowser::SaveSettings()
 {
-	GConfig->SetString(ConfigSection, TEXT("CDNRegion"), *SettingCDNRegion, WowImporterIni);
-	GConfig->SetString(ConfigSection, TEXT("Locale"), *SettingLocale, WowImporterIni);
-	GConfig->SetString(ConfigSection, TEXT("ListfileURL"), *SettingListfileURL, WowImporterIni);
-	GConfig->SetString(ConfigSection, TEXT("ListfileFallbackURL"), *SettingListfileFallbackURL, WowImporterIni);
-	GConfig->SetInt(ConfigSection, TEXT("ListfileRefreshDays"), SettingListfileRefreshDays, WowImporterIni);
-	GConfig->SetString(ConfigSection, TEXT("TactKeysURL"), *SettingTactKeysURL, WowImporterIni);
-	GConfig->SetString(ConfigSection, TEXT("TactKeysFallbackURL"), *SettingTactKeysFallbackURL, WowImporterIni);
-	GConfig->SetString(ConfigSection, TEXT("CDNFallbackHosts"), *SettingCDNFallbackHosts, WowImporterIni);
-	GConfig->SetString(ConfigSection, TEXT("DBDURL"), *SettingDBDURL, WowImporterIni);
-	GConfig->SetString(ConfigSection, TEXT("DBDFallbackURL"), *SettingDBDFallbackURL, WowImporterIni);
-	GConfig->SetString(ConfigSection, TEXT("DBDFilenameURL"), *SettingDBDFilenameURL, WowImporterIni);
-	GConfig->SetString(ConfigSection, TEXT("DBDFilenameFallbackURL"), *SettingDBDFilenameFallbackURL, WowImporterIni);
-	GConfig->SetInt(ConfigSection, TEXT("CacheExpiryDays"), SettingCacheExpiryDays, WowImporterIni);
-	GConfig->SetBool(ConfigSection, TEXT("EnableM2Skins"), SettingEnableM2Skins, WowImporterIni);
-	GConfig->SetBool(ConfigSection, TEXT("EnableUnknownFiles"), SettingEnableUnknownFiles, WowImporterIni);
-	GConfig->SetBool(ConfigSection, TEXT("OverwriteFiles"), SettingOverwriteFiles, WowImporterIni);
-	GConfig->SetBool(ConfigSection, TEXT("ExportSharedTextures"), SettingExportSharedTextures, WowImporterIni);
-	GConfig->SetBool(ConfigSection, TEXT("ExportSharedChildren"), SettingExportSharedChildren, WowImporterIni);
-	GConfig->SetBool(ConfigSection, TEXT("ExportCollision"), SettingExportCollision, WowImporterIni);
-	GConfig->SetBool(ConfigSection, TEXT("ExportUV2"), SettingExportUV2, WowImporterIni);
-	GConfig->SetBool(ConfigSection, TEXT("ExportNamedFiles"), SettingExportNamedFiles, WowImporterIni);
-	GConfig->SetBool(ConfigSection, TEXT("ShowUnknownItems"), SettingShowUnknownItems, WowImporterIni);
-	GConfig->Flush(false, WowImporterIni);
+	GConfig->SetString(ConfigSection, TEXT("CDNRegion"), *SettingCDNRegion, WowToUEIni);
+	GConfig->SetString(ConfigSection, TEXT("Locale"), *SettingLocale, WowToUEIni);
+	GConfig->SetString(ConfigSection, TEXT("ListfileURL"), *SettingListfileURL, WowToUEIni);
+	GConfig->SetString(ConfigSection, TEXT("ListfileFallbackURL"), *SettingListfileFallbackURL, WowToUEIni);
+	GConfig->SetInt(ConfigSection, TEXT("ListfileRefreshDays"), SettingListfileRefreshDays, WowToUEIni);
+	GConfig->SetString(ConfigSection, TEXT("TactKeysURL"), *SettingTactKeysURL, WowToUEIni);
+	GConfig->SetString(ConfigSection, TEXT("TactKeysFallbackURL"), *SettingTactKeysFallbackURL, WowToUEIni);
+	GConfig->SetString(ConfigSection, TEXT("CDNFallbackHosts"), *SettingCDNFallbackHosts, WowToUEIni);
+	GConfig->SetString(ConfigSection, TEXT("DBDURL"), *SettingDBDURL, WowToUEIni);
+	GConfig->SetString(ConfigSection, TEXT("DBDFallbackURL"), *SettingDBDFallbackURL, WowToUEIni);
+	GConfig->SetString(ConfigSection, TEXT("DBDFilenameURL"), *SettingDBDFilenameURL, WowToUEIni);
+	GConfig->SetString(ConfigSection, TEXT("DBDFilenameFallbackURL"), *SettingDBDFilenameFallbackURL, WowToUEIni);
+	GConfig->SetInt(ConfigSection, TEXT("CacheExpiryDays"), SettingCacheExpiryDays, WowToUEIni);
+	GConfig->SetBool(ConfigSection, TEXT("EnableM2Skins"), SettingEnableM2Skins, WowToUEIni);
+	GConfig->SetBool(ConfigSection, TEXT("EnableUnknownFiles"), SettingEnableUnknownFiles, WowToUEIni);
+	GConfig->SetBool(ConfigSection, TEXT("OverwriteFiles"), SettingOverwriteFiles, WowToUEIni);
+	GConfig->SetBool(ConfigSection, TEXT("ExportSharedTextures"), SettingExportSharedTextures, WowToUEIni);
+	GConfig->SetBool(ConfigSection, TEXT("ExportSharedChildren"), SettingExportSharedChildren, WowToUEIni);
+	GConfig->SetBool(ConfigSection, TEXT("ExportCollision"), SettingExportCollision, WowToUEIni);
+	GConfig->SetBool(ConfigSection, TEXT("ExportUV2"), SettingExportUV2, WowToUEIni);
+	GConfig->SetBool(ConfigSection, TEXT("ExportNamedFiles"), SettingExportNamedFiles, WowToUEIni);
+	GConfig->SetBool(ConfigSection, TEXT("ShowUnknownItems"), SettingShowUnknownItems, WowToUEIni);
+	GConfig->Flush(false, WowToUEIni);
 }
 
 void SWowCASCBrowser::BuildSettingsPanel()

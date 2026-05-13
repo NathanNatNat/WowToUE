@@ -2,7 +2,7 @@
 
 ## Overview
 
-M2 is World of Warcraft's primary model format used for characters, creatures, items, and doodads. The WowImporter plugin reads M2 files from the local WoW installation via CASC, parses them using the wow.export.cpp C++ port, and renders them in an editor preview viewport using UE's skeletal mesh system.
+M2 is World of Warcraft's primary model format used for characters, creatures, items, and doodads. The WowToUE plugin reads M2 files from the local WoW installation via CASC, parses them using the wow.export.cpp C++ port, and renders them in an editor preview viewport using UE's skeletal mesh system.
 
 ## File Types
 

@@ -1,9 +1,9 @@
 using UnrealBuildTool;
 using System.IO;
 
-public class WowImporterRuntime : ModuleRules
+public class WowToUERuntime : ModuleRules
 {
-	public WowImporterRuntime(ReadOnlyTargetRules Target) : base(Target)
+	public WowToUERuntime(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
 

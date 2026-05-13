@@ -1,9 +1,9 @@
 using UnrealBuildTool;
 using System.IO;
 
-public class WowImporterEditor : ModuleRules
+public class WowToUEEditor : ModuleRules
 {
-	public WowImporterEditor(ReadOnlyTargetRules Target) : base(Target)
+	public WowToUEEditor(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
 		CppStandard = CppStandardVersion.Cpp20;
@@ -12,7 +12,7 @@ public class WowImporterEditor : ModuleRules
 			new string[]
 			{
 				"Core",
-				"WowImporterRuntime",
+				"WowToUERuntime",
 				"WowLib",
 			}
 		);

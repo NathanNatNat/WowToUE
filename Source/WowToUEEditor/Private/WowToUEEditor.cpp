@@ -1,4 +1,4 @@
-#include "WowImporterEditor.h"
+#include "WowToUEEditor.h"
 #include "CASCBrowser/SWowCASCBrowser.h"
 #include "Framework/Docking/TabManager.h"
 #include "Widgets/Docking/SDockTab.h"
@@ -6,15 +6,15 @@
 #include "WorkspaceMenuStructure.h"
 #include "WorkspaceMenuStructureModule.h"
 
-#define LOCTEXT_NAMESPACE "FWowImporterEditorModule"
+#define LOCTEXT_NAMESPACE "FWowToUEEditorModule"
 
-const FName FWowImporterEditorModule::CASCBrowserTabId(TEXT("WowCASCBrowser"));
+const FName FWowToUEEditorModule::CASCBrowserTabId(TEXT("WowCASCBrowser"));
 
-void FWowImporterEditorModule::StartupModule()
+void FWowToUEEditorModule::StartupModule()
 {
 	FGlobalTabmanager::Get()->RegisterNomadTabSpawner(
 		CASCBrowserTabId,
-		FOnSpawnTab::CreateRaw(this, &FWowImporterEditorModule::SpawnCASCBrowserTab))
+		FOnSpawnTab::CreateRaw(this, &FWowToUEEditorModule::SpawnCASCBrowserTab))
 		.SetDisplayName(LOCTEXT("CASCBrowserTabTitle", "WoW CASC Browser"))
 		.SetTooltipText(LOCTEXT("CASCBrowserTabTooltip", "Browse and import World of Warcraft assets"))
 		.SetGroup(WorkspaceMenu::GetMenuStructure().GetToolsCategory());
@@ -22,7 +22,7 @@ void FWowImporterEditorModule::StartupModule()
 	UToolMenus::RegisterStartupCallback(FSimpleMulticastDelegate::FDelegate::CreateLambda([]()
 	{
 		UToolMenu* Menu = UToolMenus::Get()->ExtendMenu("LevelEditor.MainMenu.Window");
-		FToolMenuSection& Section = Menu->FindOrAddSection("WowImporter");
+		FToolMenuSection& Section = Menu->FindOrAddSection("WowToUE");
 		Section.AddMenuEntry(
 			"OpenCASCBrowser",
 			LOCTEXT("MenuEntryLabel", "WoW CASC Browser"),
@@ -36,12 +36,12 @@ void FWowImporterEditorModule::StartupModule()
 	}));
 }
 
-void FWowImporterEditorModule::ShutdownModule()
+void FWowToUEEditorModule::ShutdownModule()
 {
 	FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(CASCBrowserTabId);
 }
 
-TSharedRef<SDockTab> FWowImporterEditorModule::SpawnCASCBrowserTab(const FSpawnTabArgs& SpawnTabArgs)
+TSharedRef<SDockTab> FWowToUEEditorModule::SpawnCASCBrowserTab(const FSpawnTabArgs& SpawnTabArgs)
 {
 	return SNew(SDockTab)
 		.TabRole(NomadTab)
@@ -52,4 +52,4 @@ TSharedRef<SDockTab> FWowImporterEditorModule::SpawnCASCBrowserTab(const FSpawnT
 
 #undef LOCTEXT_NAMESPACE
 
-IMPLEMENT_MODULE(FWowImporterEditorModule, WowImporterEditor)
+IMPLEMENT_MODULE(FWowToUEEditorModule, WowToUEEditor)

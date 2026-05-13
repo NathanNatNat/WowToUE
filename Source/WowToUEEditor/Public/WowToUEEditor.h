@@ -2,7 +2,7 @@
 
 #include "Modules/ModuleManager.h"
 
-class FWowImporterEditorModule : public IModuleInterface
+class FWowToUEEditorModule : public IModuleInterface
 {
 public:
 	virtual void StartupModule() override;

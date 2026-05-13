@@ -4,7 +4,7 @@
 // reading raw file data from it. It does NOT interpret file formats beyond BLP textures.
 //
 // For asset interpretation (M2 models, WMO, ADT, DB2 lookups), see the loaders in
-// WowImporterRuntime (e.g. FWowM2Loader). Those call GetFileData() to get raw bytes
+// WowToUERuntime (e.g. FWowM2Loader). Those call GetFileData() to get raw bytes
 // and handle parsing/coordinate transforms themselves.
 
 #pragma once

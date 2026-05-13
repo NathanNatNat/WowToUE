@@ -2,7 +2,7 @@
 	"FileVersion": 3,
 	"Version": 1,
 	"VersionName": "1.0",
-	"FriendlyName": "WowImporter",
+	"FriendlyName": "WowToUE",
 	"Description": "Import World of Warcraft game assets (models, textures) into Unreal Engine",
 	"Category": "Importers",
 	"CreatedBy": "natnat",
@@ -21,12 +21,12 @@
 			"LoadingPhase": "Default"
 		},
 		{
-			"Name": "WowImporterRuntime",
+			"Name": "WowToUERuntime",
 			"Type": "Runtime",
 			"LoadingPhase": "Default"
 		},
 		{
-			"Name": "WowImporterEditor",
+			"Name": "WowToUEEditor",
 			"Type": "Editor",
 			"LoadingPhase": "PostEngineInit"
 		}
