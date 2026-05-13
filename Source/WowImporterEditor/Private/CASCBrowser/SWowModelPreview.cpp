@@ -237,6 +237,7 @@ void SWowModelPreview::SetM2Model(const FWowM2ModelData& ModelData, M2Loader* In
 		for (int32 i = 0; i < ModelData.Bones.Num(); ++i)
 			Pivots[i] = FVector(ModelData.Bones[i].Pivot);
 		Animator->SetUEPivots(Pivots);
+		Animator->StopAnimation();
 	}
 
 	if (ModelData.Positions.Num() == 0 || ModelData.Triangles.Num() == 0)
@@ -421,7 +422,7 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 	{
 		if (TriGroup[Tri] < 0) continue;
 
-		const int32 Winding[3] = { 0, 2, 1 };
+		const int32 Winding[3] = { 0, 1, 2 };
 		TArray<FVertexInstanceID> Corners;
 		Corners.SetNum(3);
 
@@ -495,7 +496,7 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 	PreviewSkeleton->MergeAllBonesToBoneTree(PreviewMesh);
 
 	// === Create UPoseableMeshComponent ===
-	FRotator WowOrient(-90.f, 0.f, 0.f);
+	FRotator WowOrient(0.f, 0.f, 0.f);
 	MeshComponent = NewObject<UPoseableMeshComponent>(PreviewScene->GetWorld());
 	MeshComponent->SetSkinnedAssetAndUpdate(PreviewMesh);
 	PreviewScene->AddComponent(MeshComponent, FTransform(WowOrient));

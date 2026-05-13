@@ -169,9 +169,10 @@ bool FWowM2Loader::LoadM2(uint32 FileDataID, FWowM2ModelData& OutModel, FM2LoadR
 		OutModel.AnimationCount = static_cast<uint32>(Loader.animations.size());
 		OutModel.SkinCount = Loader.viewCount;
 
-		// WoW -> UE coordinate transform (verified working for M2 models):
-		// UE.X(forward) = -WoW.Y, UE.Y(right) = WoW.X, UE.Z(up) = WoW.Z
-		// Scale: WoW meters -> UE centimeters (*100)
+		// WowLib→UE coordinate transform (matches UE's glTF importer ConvertVec3):
+		// WowLib is right-handed Y-up (WebGL), UE is left-handed Z-up.
+		// Swap Y/Z: UE = (WL.X, WL.Z, WL.Y) * 100, det=-1 flips handedness.
+		// A 90° yaw component rotation then orients the model to face UE +X.
 		uint32 VertCount = static_cast<uint32>(Loader.vertices.size() / 3);
 		OutModel.VertexCount = VertCount;
 		OutModel.Positions.SetNumUninitialized(VertCount);
@@ -182,12 +183,12 @@ bool FWowM2Loader::LoadM2(uint32 FileDataID, FWowM2ModelData& OutModel, FM2LoadR
 			float wx = Loader.vertices[i * 3 + 0];
 			float wy = Loader.vertices[i * 3 + 1];
 			float wz = Loader.vertices[i * 3 + 2];
-			OutModel.Positions[i] = FVector3f(-wy * 100.f, wx * 100.f, wz * 100.f);
+			OutModel.Positions[i] = FVector3f(wx * 100.f, wz * 100.f, wy * 100.f);
 
 			float nx = Loader.normals[i * 3 + 0];
 			float ny = Loader.normals[i * 3 + 1];
 			float nz = Loader.normals[i * 3 + 2];
-			OutModel.Normals[i] = FVector3f(-ny, nx, nz);
+			OutModel.Normals[i] = FVector3f(nx, nz, ny);
 		}
 
 		uint32 UVCount = static_cast<uint32>(Loader.uv.size() / 2);
@@ -295,7 +296,7 @@ bool FWowM2Loader::LoadM2(uint32 FileDataID, FWowM2ModelData& OutModel, FM2LoadR
 				Bone.ParentIndex = B.parentBone;
 				Bone.BoneID = B.boneID;
 				if (B.pivot.size() >= 3)
-					Bone.Pivot = FVector3f(-B.pivot[1] * 100.f, B.pivot[0] * 100.f, B.pivot[2] * 100.f);
+					Bone.Pivot = FVector3f(B.pivot[0] * 100.f, B.pivot[2] * 100.f, B.pivot[1] * 100.f);
 				OutModel.Bones.Add(Bone);
 			}
 		};
@@ -387,7 +388,7 @@ bool FWowM2Loader::LoadM3(uint32 FileDataID, FWowM2ModelData& OutModel, FString&
 
 		OutModel.FileDataID = FileDataID;
 
-		// M3 vertices use same coordinate system as M2 raw vertices
+		// M3 vertices use same coordinate transform as M2
 		uint32 VertCount = static_cast<uint32>(Loader.vertices.size() / 3);
 		OutModel.VertexCount = VertCount;
 		OutModel.Positions.SetNumUninitialized(VertCount);
@@ -398,14 +399,14 @@ bool FWowM2Loader::LoadM3(uint32 FileDataID, FWowM2ModelData& OutModel, FString&
 			float wx = Loader.vertices[i * 3 + 0];
 			float wy = Loader.vertices[i * 3 + 1];
 			float wz = Loader.vertices[i * 3 + 2];
-			OutModel.Positions[i] = FVector3f(-wy * 100.f, wx * 100.f, wz * 100.f);
+			OutModel.Positions[i] = FVector3f(wx * 100.f, wz * 100.f, wy * 100.f);
 
 			if (i * 3 + 2 < Loader.normals.size())
 			{
 				float nx = Loader.normals[i * 3 + 0];
 				float ny = Loader.normals[i * 3 + 1];
 				float nz = Loader.normals[i * 3 + 2];
-				OutModel.Normals[i] = FVector3f(-ny, nx, nz);
+				OutModel.Normals[i] = FVector3f(nx, nz, ny);
 			}
 		}
 
