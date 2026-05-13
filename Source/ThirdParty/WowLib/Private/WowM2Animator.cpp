@@ -119,6 +119,7 @@ void FWowM2Animator::PlayAnimation(int32 AnimIndex)
 	GlobalSeqTimes.SetNumZeroed(GlobalLoops.size());
 
 	CalcAllBones();
+	CalcSubmeshAlphas();
 }
 
 void FWowM2Animator::StopAnimation()
@@ -138,6 +139,7 @@ void FWowM2Animator::StopAnimation()
 		CurrentAnimIndex = 0;
 		CurrentAnimSource = SkelLoader;
 		CalcAllBones();
+		CalcSubmeshAlphas();
 
 		CurrentAnimation = -1;
 		CurrentAnimIndex = -1;
@@ -172,6 +174,7 @@ void FWowM2Animator::Update(float DeltaTimeSeconds)
 		AnimationTime = FMath::Fmod(AnimationTime, Duration);
 
 	CalcAllBones();
+	CalcSubmeshAlphas();
 }
 
 float FWowM2Animator::GetDuration() const
@@ -203,6 +206,7 @@ void FWowM2Animator::SetFrame(int32 Frame)
 	if (Count <= 0) return;
 	AnimationTime = (static_cast<float>(Frame) / Count) * GetDuration();
 	CalcAllBones();
+	CalcSubmeshAlphas();
 }
 
 void FWowM2Animator::StepFrame(int32 Delta)
@@ -360,6 +364,84 @@ FQuat FWowM2Animator::SampleQuat(int32 BoneIndex, int32 AnimIdx, float TimeMs)
 	FQuat Q0 = GetQuat(Values[Frame]);
 	FQuat Q1 = GetQuat(Values[Frame + 1]);
 	return FQuat::Slerp(Q0, Q1, Alpha);
+}
+
+void FWowM2Animator::SetSubmeshInfo(const TArray<int32>& InColorIndices, const TArray<int32>& InTexWeightIndices)
+{
+	SubmeshColorIndices = InColorIndices;
+	SubmeshTexWeightIndices = InTexWeightIndices;
+	SubmeshAlphas.SetNumUninitialized(InColorIndices.Num());
+	for (int32 i = 0; i < SubmeshAlphas.Num(); ++i)
+		SubmeshAlphas[i] = 1.f;
+}
+
+static float SampleTrackFloat(const M2Track& Track, int32 AnimIdx, float TimeMs, float Default)
+{
+	if (AnimIdx < 0 || AnimIdx >= static_cast<int32>(Track.timestamps.size()))
+		return Default;
+
+	const auto& Timestamps = Track.timestamps[AnimIdx];
+	const auto& Values = Track.values[AnimIdx];
+	if (Timestamps.empty() || Values.empty())
+		return Default;
+
+	auto GetFloat = [](const M2Value& V, float Def) -> float {
+		if (auto* P = std::get_if<std::vector<float>>(&V))
+			return P->empty() ? Def : (*P)[0];
+		if (auto* P = std::get_if<uint32_t>(&V))
+			return static_cast<float>(*P);
+		if (auto* P = std::get_if<int16_t>(&V))
+			return static_cast<float>(*P);
+		return Def;
+	};
+
+	if (Timestamps.size() == 1 || TimeMs <= GetTimestampMs(Timestamps[0]))
+		return GetFloat(Values[0], Default);
+
+	if (TimeMs >= GetTimestampMs(Timestamps.back()))
+		return GetFloat(Values.back(), Default);
+
+	int32 Frame = FindKeyframe(Timestamps, TimeMs);
+	if (Track.interpolation == 0)
+		return GetFloat(Values[Frame], Default);
+
+	float T0 = GetTimestampMs(Timestamps[Frame]);
+	float T1 = GetTimestampMs(Timestamps[Frame + 1]);
+	float Dt = T1 - T0;
+	float Alpha = Dt > 0.f ? FMath::Min((TimeMs - T0) / Dt, 1.f) : 0.f;
+
+	float V0 = GetFloat(Values[Frame], Default);
+	float V1 = GetFloat(Values[Frame + 1], Default);
+	return FMath::Lerp(V0, V1, Alpha);
+}
+
+void FWowM2Animator::CalcSubmeshAlphas()
+{
+	if (!Loader || SubmeshAlphas.Num() == 0) return;
+
+	const float TimeMs = AnimationTime * 1000.f;
+	const int32 AnimIdx = CurrentAnimIndex;
+
+	for (int32 i = 0; i < SubmeshAlphas.Num(); ++i)
+	{
+		float Alpha = 1.f;
+
+		int32 ColorIdx = SubmeshColorIndices.IsValidIndex(i) ? SubmeshColorIndices[i] : -1;
+		if (ColorIdx >= 0 && ColorIdx < static_cast<int32>(Loader->colors.size()))
+		{
+			float A = SampleTrackFloat(Loader->colors[ColorIdx].alpha, AnimIdx, TimeMs, 32767.f);
+			Alpha *= A / 32768.f;
+		}
+
+		int32 WeightIdx = SubmeshTexWeightIndices.IsValidIndex(i) ? SubmeshTexWeightIndices[i] : -1;
+		if (WeightIdx >= 0 && WeightIdx < static_cast<int32>(Loader->textureWeights.size()))
+		{
+			float W = SampleTrackFloat(Loader->textureWeights[WeightIdx], AnimIdx, TimeMs, 32767.f);
+			Alpha *= W / 32768.f;
+		}
+
+		SubmeshAlphas[i] = Alpha;
+	}
 }
 
 void FWowM2Animator::CalcAllBones()

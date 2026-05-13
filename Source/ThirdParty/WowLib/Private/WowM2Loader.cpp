@@ -242,6 +242,16 @@ bool FWowM2Loader::LoadM2(uint32 FileDataID, FWowM2ModelData& OutModel, FM2LoadR
 						Sub.BlendMode = Mat.blendingMode;
 						Sub.MaterialFlags = Mat.flags;
 					}
+
+					if (TU.colorIndex < static_cast<uint16_t>(Loader.colors.size()))
+						Sub.ColorIndex = TU.colorIndex;
+
+					if (TU.textureWeightComboIndex < static_cast<uint16_t>(Loader.transparencyLookup.size()))
+					{
+						uint16_t Idx = Loader.transparencyLookup[TU.textureWeightComboIndex];
+						if (Idx < static_cast<uint16_t>(Loader.textureWeights.size()))
+							Sub.TexWeightIndex = Idx;
+					}
 				}
 			}
 		}

@@ -23,6 +23,8 @@ struct WOWLIB_API FWowSubMeshData
 	uint16 TextureComboIndex;
 	uint16 BlendMode = 0;    // 0=Opaque, 1=AlphaKey, 2=Alpha, 3=NoAlphaAdd, 4=Add, 5=Mod, 6=Mod2x, 7=BlendAdd
 	uint16 MaterialFlags = 0; // 0x01=unlit, 0x04=no cull, 0x08=no depth test, 0x10=no depth write
+	int32 ColorIndex = -1;     // Index into M2 colors array (-1 = none)
+	int32 TexWeightIndex = -1; // Resolved index into M2 textureWeights array (-1 = none)
 };
 
 struct WOWLIB_API FWowTextureRef

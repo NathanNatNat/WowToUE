@@ -33,10 +33,13 @@ public:
 	bool bCloseLeftHand = false;
 
 	const TArray<FTransform>& GetBoneLocalTransforms() const { return BoneLocalTransforms; }
+	const TArray<float>& GetSubmeshAlphas() const { return SubmeshAlphas; }
+	void SetSubmeshInfo(const TArray<int32>& InColorIndices, const TArray<int32>& InTexWeightIndices);
 	bool IsPlaying() const { return bIsPlaying; }
 
 private:
 	void CalcAllBones();
+	void CalcSubmeshAlphas();
 
 	FVector SampleVec3(int32 BoneIndex, int32 TrackType, int32 AnimIdx, float TimeMs, const FVector& Default);
 	FQuat SampleQuat(int32 BoneIndex, int32 AnimIdx, float TimeMs);
@@ -59,4 +62,8 @@ private:
 	TArray<float> GlobalSeqTimes;
 	TArray<FTransform> BoneLocalTransforms;
 	TArray<bool> BoneCalculated;
+
+	TArray<int32> SubmeshColorIndices;
+	TArray<int32> SubmeshTexWeightIndices;
+	TArray<float> SubmeshAlphas;
 };

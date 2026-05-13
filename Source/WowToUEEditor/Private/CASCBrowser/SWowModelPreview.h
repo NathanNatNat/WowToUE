@@ -66,7 +66,7 @@ private:
 	void UpdateBoneTransforms();
 	void TickAnimation(float DeltaSeconds);
 	UTexture2D* CreateTextureFromBLP(uint32 FileDataID, uint32 WrapFlags = 0);
-	UMaterial* CreateUnlitMaterial(UTexture2D* Texture, uint16 BlendMode = 0, uint16 MaterialFlags = 0x05);
+	UMaterial* CreateUnlitMaterial(UTexture2D* Texture, uint16 BlendMode = 0, uint16 MaterialFlags = 0x05, bool bNeedsAlphaControl = false);
 
 	TSharedPtr<FAdvancedPreviewScene> PreviewScene;
 	TSharedPtr<FWowModelPreviewClient> ViewportClient;
@@ -75,9 +75,14 @@ private:
 	class USkeletalMesh* PreviewMesh = nullptr;
 	class USkeleton* PreviewSkeleton = nullptr;
 
+	void UpdateSubmeshAlphaVisibility();
+
 	TMap<uint32, UTexture2D*> TextureCache;
 	TArray<bool> SubMeshVisible;
+	TArray<bool> SubMeshAlphaVisible;
 	TArray<uint16> SubMeshIDs;
+	TArray<int32> BuiltSubmeshMap;
+	TArray<UMaterialInstanceDynamic*> SectionMIDs;
 	TArray<FString> SubMeshLabels;
 	FWowM2ModelData CurrentModelData;
 

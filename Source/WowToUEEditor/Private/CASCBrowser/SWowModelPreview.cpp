@@ -10,8 +10,11 @@
 #include "ReferenceSkeleton.h"
 #include "Engine/Texture2D.h"
 #include "Materials/Material.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialExpressionConstant.h"
 #include "Materials/MaterialExpressionTextureSample.h"
+#include "Materials/MaterialExpressionScalarParameter.h"
+#include "Materials/MaterialExpressionMultiply.h"
 #include "MeshDescription.h"
 #include "SkeletalMeshAttributes.h"
 #include "SkinWeightsAttributesRef.h"
@@ -121,19 +124,11 @@ static bool IsDefaultGeosetVisible(uint16 SubmeshID)
 	if (SubmeshID == 0)
 		return true;
 
-	FString IDStr = FString::FromInt(SubmeshID);
-	if (IDStr.Len() >= 2)
-	{
-		FString Prefix = IDStr.Left(2);
-		if (Prefix == TEXT("17") || Prefix == TEXT("35"))
-			return false;
-	}
-	if (IDStr.Len() >= 2 && IDStr.Right(2) == TEXT("01"))
-		return true;
-	if (IDStr.Len() >= 2 && IDStr.Left(2) == TEXT("32"))
-		return true;
+	int32 Group = SubmeshID / 100;
+	if (Group == 17 || Group == 35)
+		return false;
 
-	return false;
+	return true;
 }
 
 UTexture2D* SWowModelPreview::CreateTextureFromBLP(uint32 FileDataID, uint32 WrapFlags)
@@ -172,7 +167,7 @@ UTexture2D* SWowModelPreview::CreateTextureFromBLP(uint32 FileDataID, uint32 Wra
 	return Tex;
 }
 
-UMaterial* SWowModelPreview::CreateUnlitMaterial(UTexture2D* Texture, uint16 BlendMode, uint16 MaterialFlags)
+UMaterial* SWowModelPreview::CreateUnlitMaterial(UTexture2D* Texture, uint16 BlendMode, uint16 MaterialFlags, bool bNeedsAlphaControl)
 {
 	UMaterial* Mat = NewObject<UMaterial>(GetTransientPackage(), NAME_None, RF_Transient);
 	bool bUnlit = (MaterialFlags & 0x01) != 0;
@@ -191,8 +186,17 @@ UMaterial* SWowModelPreview::CreateUnlitMaterial(UTexture2D* Texture, uint16 Ble
 	default: Mat->BlendMode = BLEND_Opaque; break;
 	}
 
-	// Set skeletal mesh usage BEFORE adding expressions to avoid recompile losing texture refs
 	Mat->bUsedWithSkeletalMesh = true;
+
+	// MeshAlpha parameter — driven by MID for animated submesh visibility
+	UMaterialExpressionScalarParameter* AlphaParam = nullptr;
+	if (bNeedsAlphaControl)
+	{
+		AlphaParam = NewObject<UMaterialExpressionScalarParameter>(Mat);
+		AlphaParam->ParameterName = TEXT("MeshAlpha");
+		AlphaParam->DefaultValue = 1.f;
+		Mat->GetExpressionCollection().AddExpression(AlphaParam);
+	}
 
 	if (Texture)
 	{
@@ -200,19 +204,63 @@ UMaterial* SWowModelPreview::CreateUnlitMaterial(UTexture2D* Texture, uint16 Ble
 		TexNode->Texture = Texture;
 		TexNode->SamplerType = SAMPLERTYPE_Color;
 		Mat->GetExpressionCollection().AddExpression(TexNode);
-		if (bUnlit) Mat->GetEditorOnlyData()->EmissiveColor.Expression = TexNode;
-		else Mat->GetEditorOnlyData()->BaseColor.Expression = TexNode;
+
+		if (AlphaParam)
+		{
+			auto* ColorMul = NewObject<UMaterialExpressionMultiply>(Mat);
+			ColorMul->A.Expression = TexNode;
+			ColorMul->B.Expression = AlphaParam;
+			Mat->GetExpressionCollection().AddExpression(ColorMul);
+			if (bUnlit) Mat->GetEditorOnlyData()->EmissiveColor.Expression = ColorMul;
+			else Mat->GetEditorOnlyData()->BaseColor.Expression = ColorMul;
+		}
+		else
+		{
+			if (bUnlit) Mat->GetEditorOnlyData()->EmissiveColor.Expression = TexNode;
+			else Mat->GetEditorOnlyData()->BaseColor.Expression = TexNode;
+		}
 
 		if (BlendMode == 1)
 		{
-			Mat->GetEditorOnlyData()->OpacityMask.Expression = TexNode;
-			Mat->GetEditorOnlyData()->OpacityMask.OutputIndex = 4;
+			if (AlphaParam)
+			{
+				auto* Multiply = NewObject<UMaterialExpressionMultiply>(Mat);
+				Multiply->A.Expression = TexNode;
+				Multiply->A.OutputIndex = 4;
+				Multiply->B.Expression = AlphaParam;
+				Mat->GetExpressionCollection().AddExpression(Multiply);
+				Mat->GetEditorOnlyData()->OpacityMask.Expression = Multiply;
+			}
+			else
+			{
+				Mat->GetEditorOnlyData()->OpacityMask.Expression = TexNode;
+				Mat->GetEditorOnlyData()->OpacityMask.OutputIndex = 4;
+			}
 		}
-		else if (BlendMode >= 2)
+		else if (BlendMode >= 2 && Mat->BlendMode != BLEND_Modulate)
 		{
-			Mat->GetEditorOnlyData()->Opacity.Expression = TexNode;
-			Mat->GetEditorOnlyData()->Opacity.OutputIndex = 4;
+			if (AlphaParam)
+			{
+				auto* Multiply = NewObject<UMaterialExpressionMultiply>(Mat);
+				Multiply->A.Expression = TexNode;
+				Multiply->A.OutputIndex = 4;
+				Multiply->B.Expression = AlphaParam;
+				Mat->GetExpressionCollection().AddExpression(Multiply);
+				Mat->GetEditorOnlyData()->Opacity.Expression = Multiply;
+			}
+			else
+			{
+				Mat->GetEditorOnlyData()->Opacity.Expression = TexNode;
+				Mat->GetEditorOnlyData()->Opacity.OutputIndex = 4;
+			}
 		}
+	}
+	else if (AlphaParam)
+	{
+		if (Mat->BlendMode == BLEND_Masked)
+			Mat->GetEditorOnlyData()->OpacityMask.Expression = AlphaParam;
+		else if (Mat->BlendMode != BLEND_Opaque && Mat->BlendMode != BLEND_Modulate)
+			Mat->GetEditorOnlyData()->Opacity.Expression = AlphaParam;
 	}
 
 	Mat->PostEditChange();
@@ -238,6 +286,14 @@ void SWowModelPreview::SetM2Model(const FWowM2ModelData& ModelData, M2Loader* In
 		for (int32 i = 0; i < ModelData.Bones.Num(); ++i)
 			Pivots[i] = FVector(ModelData.Bones[i].Pivot);
 		Animator->SetUEPivots(Pivots);
+
+		TArray<int32> ColorIndices, TexWeightIndices;
+		for (const auto& Sub : ModelData.SubMeshes)
+		{
+			ColorIndices.Add(Sub.ColorIndex);
+			TexWeightIndices.Add(Sub.TexWeightIndex);
+		}
+		Animator->SetSubmeshInfo(ColorIndices, TexWeightIndices);
 		Animator->StopAnimation();
 	}
 
@@ -247,13 +303,17 @@ void SWowModelPreview::SetM2Model(const FWowM2ModelData& ModelData, M2Loader* In
 	int32 NumSubs = ModelData.SubMeshes.Num();
 	SubMeshIDs.SetNum(NumSubs);
 	SubMeshVisible.SetNum(NumSubs);
+	SubMeshAlphaVisible.SetNum(NumSubs);
 	SubMeshLabels.SetNum(NumSubs);
+
+	const auto& InitAlphas = Animator.IsValid() ? Animator->GetSubmeshAlphas() : TArray<float>();
 	for (int32 i = 0; i < NumSubs; ++i)
 	{
 		const auto& Sub = ModelData.SubMeshes[i];
 		SubMeshIDs[i] = Sub.SubmeshID;
 		bool bHasTexUnit = (Sub.TextureComboIndex != 0xFFFF);
 		SubMeshVisible[i] = bHasTexUnit && IsDefaultGeosetVisible(Sub.SubmeshID);
+		SubMeshAlphaVisible[i] = !InitAlphas.IsValidIndex(i) || InitAlphas[i] > 0.f;
 		SubMeshLabels[i] = GetGeosetGroupName(i, Sub.SubmeshID);
 	}
 
@@ -289,12 +349,18 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 		Resolved[i] = FMath::Clamp(static_cast<int32>(VertIdx), 0, VertCount - 1);
 	}
 
-	// Visible submeshes
+	// Visible submeshes: checkbox-visible AND alpha-visible
 	TArray<int32> VisibleSubmeshIndices;
+	BuiltSubmeshMap.Empty();
 	for (int32 i = 0; i < MD.SubMeshes.Num(); ++i)
 	{
-		if (SubMeshVisible.IsValidIndex(i) && SubMeshVisible[i])
+		bool bCheckbox = SubMeshVisible.IsValidIndex(i) && SubMeshVisible[i];
+		bool bAlpha = !SubMeshAlphaVisible.IsValidIndex(i) || SubMeshAlphaVisible[i];
+		if (bCheckbox && bAlpha)
+		{
+			BuiltSubmeshMap.Add(i);
 			VisibleSubmeshIndices.Add(i);
+		}
 	}
 	if (VisibleSubmeshIndices.Num() == 0)
 		return;
@@ -472,9 +538,10 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 		}
 
 		const auto& Sub = MD.SubMeshes[OldIdx];
+		bool bNeedsAlpha = (Sub.ColorIndex >= 0 || Sub.TexWeightIndex >= 0);
 		UMaterialInterface* Mat;
 		if (TexForSlot)
-			Mat = CreateUnlitMaterial(TexForSlot, Sub.BlendMode, Sub.MaterialFlags);
+			Mat = CreateUnlitMaterial(TexForSlot, Sub.BlendMode, Sub.MaterialFlags, bNeedsAlpha);
 		else
 			Mat = UMaterial::GetDefaultMaterial(MD_Surface);
 
@@ -506,7 +573,18 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 	MeshComponent->SetSkinnedAssetAndUpdate(PreviewMesh);
 	PreviewScene->AddComponent(MeshComponent, FTransform(WowOrient));
 
+	// Create MIDs for per-submesh alpha control
+	SectionMIDs.Empty();
+	for (int32 i = 0; i < MeshComponent->GetNumMaterials(); ++i)
+	{
+		UMaterialInterface* BaseMat = MeshComponent->GetMaterial(i);
+		UMaterialInstanceDynamic* MID = UMaterialInstanceDynamic::Create(BaseMat, MeshComponent);
+		SectionMIDs.Add(MID);
+		MeshComponent->SetMaterial(i, MID);
+	}
+
 	UpdateBoneTransforms();
+	UpdateSubmeshAlphaVisibility();
 
 	if (bFitCamera && ViewportClient.IsValid())
 	{
@@ -673,11 +751,48 @@ void SWowModelPreview::ApplyCreatureDisplay(const FWowCreatureDisplay& Display)
 	else
 	{
 		for (int32 i = 0; i < SubMeshIDs.Num(); ++i)
-			SubMeshVisible[i] = IsDefaultGeosetVisible(SubMeshIDs[i]);
+		{
+			uint16 ID = SubMeshIDs[i];
+			SubMeshVisible[i] = (ID == 0) || (ID % 10 == 0) || (ID % 100 == 1);
+		}
 	}
 
 	TextureCache.Empty();
 	RebuildMesh();
+}
+
+void SWowModelPreview::UpdateSubmeshAlphaVisibility()
+{
+	if (!Animator) return;
+
+	const auto& Alphas = Animator->GetSubmeshAlphas();
+	bool bNeedRebuild = false;
+
+	for (int32 i = 0; i < SubMeshVisible.Num() && i < Alphas.Num(); ++i)
+	{
+		bool bWasAlphaVisible = !SubMeshAlphaVisible.IsValidIndex(i) || SubMeshAlphaVisible[i];
+		bool bNowAlphaVisible = Alphas[i] > 0.f;
+		if (bWasAlphaVisible != bNowAlphaVisible)
+		{
+			if (SubMeshAlphaVisible.IsValidIndex(i))
+				SubMeshAlphaVisible[i] = bNowAlphaVisible;
+			bNeedRebuild = true;
+		}
+	}
+
+	if (bNeedRebuild)
+		RebuildMesh();
+
+	// Drive color multiplier on visible sections
+	if (MeshComponent)
+	{
+		for (int32 Section = 0; Section < BuiltSubmeshMap.Num() && Section < SectionMIDs.Num(); ++Section)
+		{
+			int32 OrigIdx = BuiltSubmeshMap[Section];
+			float Alpha = Alphas.IsValidIndex(OrigIdx) ? Alphas[OrigIdx] : 1.f;
+			SectionMIDs[Section]->SetScalarParameterValue(TEXT("MeshAlpha"), Alpha);
+		}
+	}
 }
 
 void SWowModelPreview::TickAnimation(float DeltaSeconds)
@@ -685,6 +800,7 @@ void SWowModelPreview::TickAnimation(float DeltaSeconds)
 	if (!bSkeletonEnabled || !Animator || !Animator->IsPlaying() || Animator->bPaused) return;
 	Animator->Update(DeltaSeconds);
 	UpdateBoneTransforms();
+	UpdateSubmeshAlphaVisibility();
 }
 
 void SWowModelPreview::PlayAnimation(int32 AnimIndex)
@@ -692,6 +808,7 @@ void SWowModelPreview::PlayAnimation(int32 AnimIndex)
 	if (!Animator) return;
 	Animator->PlayAnimation(AnimIndex);
 	UpdateBoneTransforms();
+	UpdateSubmeshAlphaVisibility();
 }
 
 void SWowModelPreview::StopAnimation()
@@ -699,6 +816,7 @@ void SWowModelPreview::StopAnimation()
 	if (!Animator) return;
 	Animator->StopAnimation();
 	UpdateBoneTransforms();
+	UpdateSubmeshAlphaVisibility();
 }
 
 void SWowModelPreview::SetAnimationPaused(bool bPaused)
@@ -711,6 +829,7 @@ void SWowModelPreview::SetAnimationFrame(int32 Frame)
 	if (!Animator) return;
 	Animator->SetFrame(Frame);
 	UpdateBoneTransforms();
+	UpdateSubmeshAlphaVisibility();
 }
 
 void SWowModelPreview::StepAnimationFrame(int32 Delta)
@@ -718,6 +837,7 @@ void SWowModelPreview::StepAnimationFrame(int32 Delta)
 	if (!Animator) return;
 	Animator->StepFrame(Delta);
 	UpdateBoneTransforms();
+	UpdateSubmeshAlphaVisibility();
 }
 
 int32 SWowModelPreview::GetAnimationFrame() const
