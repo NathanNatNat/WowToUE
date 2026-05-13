@@ -221,10 +221,11 @@ void SWowModelPreview::SetM2Model(const FWowM2ModelData& ModelData)
 	SubMeshLabels.SetNum(NumSubs);
 	for (int32 i = 0; i < NumSubs; ++i)
 	{
-		uint16 ID = ModelData.SubMeshes[i].SubmeshID;
-		SubMeshIDs[i] = ID;
-		SubMeshVisible[i] = IsDefaultGeosetVisible(ID);
-		SubMeshLabels[i] = GetGeosetGroupName(i, ID);
+		const auto& Sub = ModelData.SubMeshes[i];
+		SubMeshIDs[i] = Sub.SubmeshID;
+		bool bHasTexUnit = (Sub.TextureComboIndex != 0xFFFF);
+		SubMeshVisible[i] = bHasTexUnit && IsDefaultGeosetVisible(Sub.SubmeshID);
+		SubMeshLabels[i] = GetGeosetGroupName(i, Sub.SubmeshID);
 	}
 
 	RebuildMesh(true);
@@ -386,6 +387,13 @@ uint16 SWowModelPreview::GetSubMeshID(int32 Index) const
 bool SWowModelPreview::IsGeosetVisible(int32 Index) const
 {
 	return SubMeshVisible.IsValidIndex(Index) ? SubMeshVisible[Index] : true;
+}
+
+bool SWowModelPreview::HasTextureUnit(int32 Index) const
+{
+	if (!CurrentModelData.SubMeshes.IsValidIndex(Index))
+		return false;
+	return CurrentModelData.SubMeshes[Index].TextureComboIndex != 0xFFFF;
 }
 
 FString SWowModelPreview::GetGeosetLabel(int32 Index) const

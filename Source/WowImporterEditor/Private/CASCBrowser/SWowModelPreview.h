@@ -31,6 +31,7 @@ public:
 	int32 GetNumSubMeshes() const { return SubMeshVisible.Num(); }
 	uint16 GetSubMeshID(int32 Index) const;
 	bool IsGeosetVisible(int32 Index) const;
+	bool HasTextureUnit(int32 Index) const;
 	FString GetGeosetLabel(int32 Index) const;
 
 private:

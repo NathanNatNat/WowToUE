@@ -513,6 +513,9 @@ void SWowCASCBrowser::BuildGeosetPanel()
 
 	for (int32 i = 0; i < NumSubs; ++i)
 	{
+		if (!ModelPreview->HasTextureUnit(i))
+			continue;
+
 		FString Label = ModelPreview->GetGeosetLabel(i);
 
 		GeosetScroll->AddSlot()
