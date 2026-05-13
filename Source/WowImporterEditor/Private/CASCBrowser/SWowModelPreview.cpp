@@ -2,13 +2,20 @@
 #include "WowCASCInterface.h"
 #include "WowM2Animator.h"
 #include "AdvancedPreviewScene.h"
-#include "Components/StaticMeshComponent.h"
-#include "Engine/StaticMesh.h"
+#include "Components/PoseableMeshComponent.h"
+#include "Engine/SkeletalMesh.h"
+#include "Engine/SkinnedAssetCommon.h"
+#include "Animation/Skeleton.h"
+#include "ReferenceSkeleton.h"
 #include "Engine/Texture2D.h"
 #include "Materials/Material.h"
+#include "Materials/MaterialExpressionConstant.h"
 #include "Materials/MaterialExpressionTextureSample.h"
-#include "StaticMeshAttributes.h"
 #include "MeshDescription.h"
+#include "SkeletalMeshAttributes.h"
+#include "SkinWeightsAttributesRef.h"
+#include "StaticToSkeletalMeshConverter.h"
+#include "BoneWeights.h"
 
 FWowModelPreviewClient::FWowModelPreviewClient(FAdvancedPreviewScene& InPreviewScene, const TSharedRef<SEditorViewport>& InViewport)
 	: FEditorViewportClient(nullptr, &InPreviewScene, InViewport)
@@ -32,7 +39,6 @@ void SWowModelPreview::Construct(const FArguments& InArgs)
 	CVS.bDefaultLighting = true;
 	PreviewScene = MakeShared<FAdvancedPreviewScene>(CVS);
 	PreviewScene->SetFloorVisibility(true);
-
 	SEditorViewport::Construct(SEditorViewport::FArguments());
 }
 
@@ -41,9 +47,7 @@ SWowModelPreview::~SWowModelPreview()
 	ClearModel();
 	Animator.Reset();
 	if (ViewportClient.IsValid())
-	{
 		ViewportClient->Viewport = nullptr;
-	}
 }
 
 TSharedRef<FEditorViewportClient> SWowModelPreview::MakeEditorViewportClient()
@@ -61,11 +65,14 @@ void SWowModelPreview::ClearModel()
 		MeshComponent = nullptr;
 	}
 	PreviewMesh = nullptr;
+	PreviewSkeleton = nullptr;
 	SubMeshVisible.Empty();
 	SubMeshIDs.Empty();
 	SubMeshLabels.Empty();
 	CurrentModelData = FWowM2ModelData();
+	TextureCache.Empty();
 	Animator.Reset();
+	bAnimationPlaying = false;
 }
 
 DEFINE_LOG_CATEGORY_STATIC(LogWowPreview, Log, All);
@@ -107,16 +114,12 @@ static bool IsDefaultGeosetVisible(uint16 SubmeshID)
 		return true;
 
 	FString IDStr = FString::FromInt(SubmeshID);
-
-	// Starts with "17" (Eyeglow) or "35" (Piercings) — hidden
 	if (IDStr.Len() >= 2)
 	{
 		FString Prefix = IDStr.Left(2);
 		if (Prefix == TEXT("17") || Prefix == TEXT("35"))
 			return false;
 	}
-
-	// Ends with "01" or starts with "32" — visible
 	if (IDStr.Len() >= 2 && IDStr.Right(2) == TEXT("01"))
 		return true;
 	if (IDStr.Len() >= 2 && IDStr.Left(2) == TEXT("32"))
@@ -127,12 +130,11 @@ static bool IsDefaultGeosetVisible(uint16 SubmeshID)
 
 UTexture2D* SWowModelPreview::CreateTextureFromBLP(uint32 FileDataID, uint32 WrapFlags)
 {
-	if (FileDataID == 0)
-		return nullptr;
+	if (FileDataID == 0) return nullptr;
+	if (UTexture2D** Cached = TextureCache.Find(FileDataID)) return *Cached;
 
 	FWowCASCInterface::FDecodedTexture Decoded;
 	FString Error;
-
 	if (!FWowCASCInterface::Get().DecodeBLP(FileDataID, Decoded, Error) || Decoded.Width == 0)
 		return nullptr;
 
@@ -158,16 +160,15 @@ UTexture2D* SWowModelPreview::CreateTextureFromBLP(uint32 FileDataID, uint32 Wra
 	Mip.BulkData.Unlock();
 	Tex->UpdateResource();
 
+	TextureCache.Add(FileDataID, Tex);
 	return Tex;
 }
 
 UMaterial* SWowModelPreview::CreateUnlitMaterial(UTexture2D* Texture, uint16 BlendMode, uint16 MaterialFlags)
 {
 	UMaterial* Mat = NewObject<UMaterial>(GetTransientPackage(), NAME_None, RF_Transient);
-
 	bool bUnlit = (MaterialFlags & 0x01) != 0;
 	bool bTwoSided = (MaterialFlags & 0x04) != 0;
-
 	Mat->TwoSided = bTwoSided;
 	Mat->SetShadingModel(bUnlit ? MSM_Unlit : MSM_DefaultLit);
 
@@ -176,10 +177,8 @@ UMaterial* SWowModelPreview::CreateUnlitMaterial(UTexture2D* Texture, uint16 Ble
 	case 0: Mat->BlendMode = BLEND_Opaque; break;
 	case 1: Mat->BlendMode = BLEND_Masked; break;
 	case 2: Mat->BlendMode = BLEND_Translucent; break;
-	case 3: // NoAlphaAdd — additive without alpha
-	case 4: Mat->BlendMode = BLEND_Additive; break;
-	case 5: Mat->BlendMode = BLEND_Modulate; break;
-	case 6: Mat->BlendMode = BLEND_Modulate; break;
+	case 3: case 4: Mat->BlendMode = BLEND_Additive; break;
+	case 5: case 6: Mat->BlendMode = BLEND_Modulate; break;
 	case 7: Mat->BlendMode = BLEND_Additive; break;
 	default: Mat->BlendMode = BLEND_Opaque; break;
 	}
@@ -190,21 +189,18 @@ UMaterial* SWowModelPreview::CreateUnlitMaterial(UTexture2D* Texture, uint16 Ble
 		TexNode->Texture = Texture;
 		TexNode->SamplerType = SAMPLERTYPE_Color;
 		Mat->GetExpressionCollection().AddExpression(TexNode);
-
-		if (bUnlit)
-			Mat->GetEditorOnlyData()->EmissiveColor.Expression = TexNode;
-		else
-			Mat->GetEditorOnlyData()->BaseColor.Expression = TexNode;
+		if (bUnlit) Mat->GetEditorOnlyData()->EmissiveColor.Expression = TexNode;
+		else Mat->GetEditorOnlyData()->BaseColor.Expression = TexNode;
 
 		if (BlendMode == 1)
 		{
 			Mat->GetEditorOnlyData()->OpacityMask.Expression = TexNode;
-			Mat->GetEditorOnlyData()->OpacityMask.OutputIndex = 4; // Alpha channel
+			Mat->GetEditorOnlyData()->OpacityMask.OutputIndex = 4;
 		}
 		else if (BlendMode >= 2)
 		{
 			Mat->GetEditorOnlyData()->Opacity.Expression = TexNode;
-			Mat->GetEditorOnlyData()->Opacity.OutputIndex = 4; // Alpha channel
+			Mat->GetEditorOnlyData()->Opacity.OutputIndex = 4;
 		}
 	}
 
@@ -250,6 +246,7 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 		MeshComponent = nullptr;
 	}
 	PreviewMesh = nullptr;
+	PreviewSkeleton = nullptr;
 
 	const auto& MD = CurrentModelData;
 	if (MD.Positions.Num() == 0 || MD.Triangles.Num() == 0)
@@ -258,57 +255,9 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 	const int32 NumTriIndices = MD.Triangles.Num();
 	const int32 TriCount = NumTriIndices / 3;
 	const int32 VertCount = MD.Positions.Num();
+	const int32 BoneCount = MD.Bones.Num();
 
-	// Apply bone transforms (CPU skinning)
-	TArray<FVector3f> SkinnedPositions;
-	TArray<FVector3f> SkinnedNormals;
-	if (Animator && MD.BoneWeights.Num() >= VertCount * 4 && MD.BoneIndices.Num() >= VertCount * 4)
-	{
-		const auto& BoneTransforms = Animator->GetBoneLocalTransforms();
-		const int32 BoneCount = BoneTransforms.Num();
-
-		// Build component-space bone matrices from local transforms
-		TArray<FMatrix> BoneMatrices;
-		BoneMatrices.SetNum(BoneCount);
-		for (int32 i = 0; i < BoneCount; ++i)
-		{
-			FMatrix Local = BoneTransforms[i].ToMatrixWithScale();
-			int32 ParentIdx = (i < MD.Bones.Num()) ? MD.Bones[i].ParentIndex : -1;
-			if (ParentIdx >= 0 && ParentIdx < BoneCount)
-				BoneMatrices[i] = Local * BoneMatrices[ParentIdx];
-			else
-				BoneMatrices[i] = Local;
-		}
-
-		SkinnedPositions.SetNumUninitialized(VertCount);
-		SkinnedNormals.SetNumUninitialized(VertCount);
-
-		for (int32 v = 0; v < VertCount; ++v)
-		{
-			FVector4 SrcPos(MD.Positions[v].X, MD.Positions[v].Y, MD.Positions[v].Z, 1.f);
-			FVector4 SrcNrm(MD.Normals[v].X, MD.Normals[v].Y, MD.Normals[v].Z, 0.f);
-			FVector4 OutPos(0, 0, 0, 0);
-			FVector4 OutNrm(0, 0, 0, 0);
-
-			for (int32 j = 0; j < 4; ++j)
-			{
-				uint8 BIdx = MD.BoneIndices[v * 4 + j];
-				uint8 BWeight = MD.BoneWeights[v * 4 + j];
-				if (BWeight == 0 || BIdx >= BoneCount) continue;
-
-				float W = BWeight / 255.f;
-				OutPos += BoneMatrices[BIdx].TransformFVector4(SrcPos) * W;
-				OutNrm += BoneMatrices[BIdx].TransformFVector4(SrcNrm) * W;
-			}
-
-			SkinnedPositions[v] = FVector3f(OutPos.X, OutPos.Y, OutPos.Z);
-			SkinnedNormals[v] = FVector3f(OutNrm.X, OutNrm.Y, OutNrm.Z);
-		}
-	}
-
-	const TArray<FVector3f>& Positions = SkinnedPositions.Num() > 0 ? SkinnedPositions : MD.Positions;
-	const TArray<FVector3f>& Normals = SkinnedNormals.Num() > 0 ? SkinnedNormals : MD.Normals;
-
+	// Resolve triangle indices
 	TArray<uint32> Resolved;
 	Resolved.SetNumUninitialized(NumTriIndices);
 	for (int32 i = 0; i < NumTriIndices; ++i)
@@ -318,22 +267,20 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 		Resolved[i] = FMath::Clamp(static_cast<int32>(VertIdx), 0, VertCount - 1);
 	}
 
-	// Collect only visible submeshes, mapping old index to new
+	// Visible submeshes
 	TArray<int32> VisibleSubmeshIndices;
 	for (int32 i = 0; i < MD.SubMeshes.Num(); ++i)
 	{
 		if (SubMeshVisible.IsValidIndex(i) && SubMeshVisible[i])
 			VisibleSubmeshIndices.Add(i);
 	}
-
 	if (VisibleSubmeshIndices.Num() == 0)
 		return;
 
-	// Build tri-to-visible-group mapping; skip tris belonging to hidden submeshes
+	// Tri-to-group mapping
 	TArray<int32> TriGroup;
 	TriGroup.SetNumUninitialized(TriCount);
-	for (int32 T = 0; T < TriCount; ++T)
-		TriGroup[T] = -1;
+	for (int32 T = 0; T < TriCount; ++T) TriGroup[T] = -1;
 
 	for (int32 NewIdx = 0; NewIdx < VisibleSubmeshIndices.Num(); ++NewIdx)
 	{
@@ -344,28 +291,67 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 			TriGroup[T] = NewIdx;
 	}
 
+	// === Build USkeleton ===
+	PreviewSkeleton = NewObject<USkeleton>(GetTransientPackage(), NAME_None, RF_Transient);
+	{
+		FReferenceSkeletonModifier SkMod(PreviewSkeleton);
+		for (int32 i = 0; i < BoneCount; ++i)
+		{
+			const auto& B = MD.Bones[i];
+			FMeshBoneInfo Info;
+			Info.Name = B.BoneName;
+			Info.ParentIndex = B.ParentIndex;
+			SkMod.Add(Info, FTransform::Identity, true);
+		}
+	}
+
+	// === Build FMeshDescription with skeletal attributes ===
 	FMeshDescription MeshDesc;
-	FStaticMeshAttributes Attributes(MeshDesc);
-	Attributes.Register();
+	FSkeletalMeshAttributes SkAttrs(MeshDesc);
+	SkAttrs.Register();
 
 	TArray<FPolygonGroupID> PolyGroups;
 	for (int32 i = 0; i < VisibleSubmeshIndices.Num(); ++i)
 		PolyGroups.Add(MeshDesc.CreatePolygonGroup());
 
+	auto PolyGroupNames = SkAttrs.GetPolygonGroupMaterialSlotNames();
+	for (int32 i = 0; i < VisibleSubmeshIndices.Num(); ++i)
+		PolyGroupNames.Set(PolyGroups[i], FName(*FString::Printf(TEXT("Material_%d"), i)));
+
 	MeshDesc.ReserveNewVertices(VertCount);
+
+	auto Positions = SkAttrs.GetVertexPositions();
+	auto SkinWeights = SkAttrs.GetVertexSkinWeights();
+
 	for (int32 i = 0; i < VertCount; ++i)
 	{
 		FVertexID VID = MeshDesc.CreateVertex();
-		Attributes.GetVertexPositions()[VID] = Positions[i];
+		Positions.Set(VID, MD.Positions[i]);
+
+		// Skin weights
+		TArray<UE::AnimationCore::FBoneWeight> BW;
+		if (MD.BoneWeights.Num() >= (i + 1) * 4 && MD.BoneIndices.Num() >= (i + 1) * 4)
+		{
+			for (int32 j = 0; j < 4; ++j)
+			{
+				uint8 BIdx = MD.BoneIndices[i * 4 + j];
+				uint8 BWt = MD.BoneWeights[i * 4 + j];
+				if (BWt > 0 && BIdx < BoneCount)
+					BW.Add(UE::AnimationCore::FBoneWeight(BIdx, BWt / 255.f));
+			}
+		}
+		if (BW.Num() == 0)
+			BW.Add(UE::AnimationCore::FBoneWeight(0, 1.0f));
+
+		SkinWeights.Set(VID, UE::AnimationCore::FBoneWeights::Create(BW));
 	}
 
-	TVertexInstanceAttributesRef<FVector3f> InstNormals = Attributes.GetVertexInstanceNormals();
-	TVertexInstanceAttributesRef<FVector2f> InstUVs = Attributes.GetVertexInstanceUVs();
+	auto InstNormals = SkAttrs.GetVertexInstanceNormals();
+	auto InstUVs = SkAttrs.GetVertexInstanceUVs();
 
 	for (int32 Tri = 0; Tri < TriCount; ++Tri)
 	{
-		if (TriGroup[Tri] < 0)
-			continue;
+		if (TriGroup[Tri] < 0) continue;
 
 		const int32 Winding[3] = { 0, 2, 1 };
 		TArray<FVertexInstanceID> Corners;
@@ -377,8 +363,8 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 			FVertexInstanceID VIID = MeshDesc.CreateVertexInstance(FVertexID(VI));
 			Corners[C] = VIID;
 
-			if (static_cast<int32>(VI) < Normals.Num())
-				InstNormals[VIID] = Normals[VI];
+			if (static_cast<int32>(VI) < MD.Normals.Num())
+				InstNormals[VIID] = MD.Normals[VI];
 			if (static_cast<int32>(VI) < MD.UVs.Num())
 				InstUVs.Set(VIID, 0, MD.UVs[VI]);
 		}
@@ -386,17 +372,13 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 		MeshDesc.CreateTriangle(PolyGroups[TriGroup[Tri]], Corners);
 	}
 
-	PreviewMesh = NewObject<UStaticMesh>(GetTransientPackage(), NAME_None, RF_Transient);
-	for (int32 i = 0; i < VisibleSubmeshIndices.Num(); ++i)
-		PreviewMesh->GetStaticMaterials().Add(FStaticMaterial());
-	PreviewMesh->AddSourceModel();
+	// === Build USkeletalMesh ===
+	PreviewMesh = NewObject<USkeletalMesh>(GetTransientPackage(), NAME_None, RF_Transient);
+	PreviewMesh->SetRefSkeleton(PreviewSkeleton->GetReferenceSkeleton());
+	PreviewMesh->CalculateInvRefMatrices();
 
-	FMeshDescription* MeshPtr = PreviewMesh->CreateMeshDescription(0);
-	*MeshPtr = MoveTemp(MeshDesc);
-	PreviewMesh->CommitMeshDescription(0);
-	PreviewMesh->Build();
-
-	// Load textures and create materials for visible submeshes
+	// Materials
+	TArray<FSkeletalMaterial> SkMaterials;
 	TArray<UTexture2D*> LoadedTextures;
 	for (int32 i = 0; i < MD.Textures.Num(); ++i)
 	{
@@ -409,7 +391,6 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 	{
 		int32 OldIdx = VisibleSubmeshIndices[NewIdx];
 		UTexture2D* TexForSlot = nullptr;
-
 		if (OldIdx < MD.SubMeshes.Num())
 		{
 			uint16 ComboIdx = MD.SubMeshes[OldIdx].TextureComboIndex;
@@ -421,14 +402,39 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 			}
 		}
 
-		const auto& Sub = MD.SubMeshes[VisibleSubmeshIndices[NewIdx]];
-		PreviewMesh->GetStaticMaterials()[NewIdx].MaterialInterface = CreateUnlitMaterial(TexForSlot, Sub.BlendMode, Sub.MaterialFlags);
+		const auto& Sub = MD.SubMeshes[OldIdx];
+		UMaterial* Mat = CreateUnlitMaterial(TexForSlot, Sub.BlendMode, Sub.MaterialFlags);
+
+		FSkeletalMaterial SkMat;
+		SkMat.MaterialInterface = Mat;
+		SkMat.MaterialSlotName = FName(*FString::Printf(TEXT("Material_%d"), NewIdx));
+		SkMat.ImportedMaterialSlotName = SkMat.MaterialSlotName;
+		SkMaterials.Add(SkMat);
 	}
 
+	TArray<const FMeshDescription*> Descs = { &MeshDesc };
+	bool bBuilt = FStaticToSkeletalMeshConverter::InitializeSkeletalMeshFromMeshDescriptions(
+		PreviewMesh, Descs, SkMaterials, PreviewSkeleton->GetReferenceSkeleton(), false, true);
+
+	if (!bBuilt)
+	{
+		UE_LOG(LogWowPreview, Error, TEXT("Failed to build skeletal mesh"));
+		PreviewMesh = nullptr;
+		PreviewSkeleton = nullptr;
+		return;
+	}
+
+	PreviewMesh->SetSkeleton(PreviewSkeleton);
+	PreviewSkeleton->RecreateBoneTree(PreviewMesh);
+
+	// === Create UPoseableMeshComponent ===
 	FRotator WowOrient(-90.f, 0.f, 0.f);
-	MeshComponent = NewObject<UStaticMeshComponent>(PreviewScene->GetWorld());
-	MeshComponent->SetStaticMesh(PreviewMesh);
+	MeshComponent = NewObject<UPoseableMeshComponent>(PreviewScene->GetWorld());
+	MeshComponent->SetSkinnedAssetAndUpdate(PreviewMesh);
 	PreviewScene->AddComponent(MeshComponent, FTransform(WowOrient));
+
+	// Apply rest pose bone transforms
+	UpdateBoneTransforms();
 
 	if (bFitCamera && ViewportClient.IsValid())
 	{
@@ -438,6 +444,19 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 		ViewportClient->SetViewRotation(FRotator(-20, -135, 0));
 		ViewportClient->SetLookAtLocation(Bounds.Origin);
 	}
+}
+
+void SWowModelPreview::UpdateBoneTransforms()
+{
+	if (!Animator || !MeshComponent) return;
+
+	const auto& Transforms = Animator->GetBoneLocalTransforms();
+	const int32 NumBones = FMath::Min(Transforms.Num(), MeshComponent->GetNumBones());
+
+	for (int32 i = 0; i < NumBones; ++i)
+		MeshComponent->BoneSpaceTransforms[i] = Transforms[i];
+
+	MeshComponent->MarkRefreshTransformDirty();
 }
 
 uint16 SWowModelPreview::GetSubMeshID(int32 Index) const
@@ -452,8 +471,7 @@ bool SWowModelPreview::IsGeosetVisible(int32 Index) const
 
 bool SWowModelPreview::HasTextureUnit(int32 Index) const
 {
-	if (!CurrentModelData.SubMeshes.IsValidIndex(Index))
-		return false;
+	if (!CurrentModelData.SubMeshes.IsValidIndex(Index)) return false;
 	return CurrentModelData.SubMeshes[Index].TextureComboIndex != 0xFFFF;
 }
 
@@ -464,104 +482,76 @@ FString SWowModelPreview::GetGeosetLabel(int32 Index) const
 
 void SWowModelPreview::SetGeosetVisible(int32 SubMeshIndex, bool bVisible)
 {
-	if (!SubMeshVisible.IsValidIndex(SubMeshIndex))
-		return;
-
+	if (!SubMeshVisible.IsValidIndex(SubMeshIndex)) return;
 	SubMeshVisible[SubMeshIndex] = bVisible;
 	RebuildMesh();
 }
 
 void SWowModelPreview::SetAllGeosetsVisible(bool bVisible)
 {
-	for (int32 i = 0; i < SubMeshVisible.Num(); ++i)
-		SubMeshVisible[i] = bVisible;
-
+	for (int32 i = 0; i < SubMeshVisible.Num(); ++i) SubMeshVisible[i] = bVisible;
 	RebuildMesh();
 }
 
 void SWowModelPreview::ApplyCreatureDisplay(const FWowCreatureDisplay& Display)
 {
-	if (CurrentModelData.FileDataID == 0)
-		return;
+	if (CurrentModelData.FileDataID == 0) return;
 
-	// Apply replaceable textures
 	for (int32 i = 0; i < CurrentModelData.Textures.Num(); ++i)
 	{
 		uint32 TextureType = CurrentModelData.Textures[i].Type;
 		uint32 Slot = 0;
 		bool bIsReplaceable = false;
-
-		if (TextureType >= 11 && TextureType < 14)
-		{
-			Slot = TextureType - 11;
-			bIsReplaceable = true;
-		}
-		else if (TextureType > 1 && TextureType < 5)
-		{
-			Slot = TextureType - 2;
-			bIsReplaceable = true;
-		}
+		if (TextureType >= 11 && TextureType < 14) { Slot = TextureType - 11; bIsReplaceable = true; }
+		else if (TextureType > 1 && TextureType < 5) { Slot = TextureType - 2; bIsReplaceable = true; }
 
 		if (bIsReplaceable && static_cast<int32>(Slot) < Display.TextureFileDataIDs.Num())
 		{
 			uint32 ResolvedID = Display.TextureFileDataIDs[Slot];
-			if (ResolvedID > 0)
-				CurrentModelData.Textures[i].FileDataID = ResolvedID;
+			if (ResolvedID > 0) CurrentModelData.Textures[i].FileDataID = ResolvedID;
 		}
 	}
 
-	// Apply extra geosets: hide all geosets with ID < 900, show only specified ones
 	if (Display.ExtraGeosets.Num() > 0)
 	{
-		TSet<uint32> EnabledGeosets(Display.ExtraGeosets);
-
+		TSet<uint32> Enabled(Display.ExtraGeosets);
 		for (int32 i = 0; i < SubMeshIDs.Num(); ++i)
 		{
-			uint16 ID = SubMeshIDs[i];
-			if (ID == 0 || ID >= 900)
-				continue;
-
-			SubMeshVisible[i] = EnabledGeosets.Contains(static_cast<uint32>(ID));
+			if (SubMeshIDs[i] == 0 || SubMeshIDs[i] >= 900) continue;
+			SubMeshVisible[i] = Enabled.Contains(static_cast<uint32>(SubMeshIDs[i]));
 		}
 	}
 	else
 	{
-		// No extra geosets — reset to default visibility
 		for (int32 i = 0; i < SubMeshIDs.Num(); ++i)
 			SubMeshVisible[i] = IsDefaultGeosetVisible(SubMeshIDs[i]);
 	}
 
+	TextureCache.Empty();
 	RebuildMesh();
 }
 
 void SWowModelPreview::TickAnimation(float DeltaSeconds)
 {
-	if (!Animator || Animator->bPaused) return;
-
-	int32 PrevFrame = Animator->GetCurrentFrame();
+	if (!Animator || !bAnimationPlaying || Animator->bPaused) return;
 	Animator->Update(DeltaSeconds);
-	int32 CurrFrame = Animator->GetCurrentFrame();
-
-	if (CurrFrame != PrevFrame)
-		RebuildMesh();
+	UpdateBoneTransforms();
 }
 
 void SWowModelPreview::PlayAnimation(int32 AnimIndex)
 {
-	if (Animator)
-	{
-		Animator->PlayAnimation(AnimIndex);
-		RebuildMesh();
-	}
+	if (!Animator) return;
+	bAnimationPlaying = true;
+	Animator->PlayAnimation(AnimIndex);
+	UpdateBoneTransforms();
 }
 
 void SWowModelPreview::StopAnimation()
 {
-	if (Animator)
-	{
-		Animator->StopAnimation();
-		RebuildMesh();
-	}
+	if (!Animator) return;
+	bAnimationPlaying = false;
+	Animator->StopAnimation();
+	UpdateBoneTransforms();
 }
 
 void SWowModelPreview::SetAnimationPaused(bool bPaused)
@@ -571,20 +561,16 @@ void SWowModelPreview::SetAnimationPaused(bool bPaused)
 
 void SWowModelPreview::SetAnimationFrame(int32 Frame)
 {
-	if (Animator)
-	{
-		Animator->SetFrame(Frame);
-		RebuildMesh();
-	}
+	if (!Animator) return;
+	Animator->SetFrame(Frame);
+	UpdateBoneTransforms();
 }
 
 void SWowModelPreview::StepAnimationFrame(int32 Delta)
 {
-	if (Animator)
-	{
-		Animator->StepFrame(Delta);
-		RebuildMesh();
-	}
+	if (!Animator) return;
+	Animator->StepFrame(Delta);
+	UpdateBoneTransforms();
 }
 
 int32 SWowModelPreview::GetAnimationFrame() const

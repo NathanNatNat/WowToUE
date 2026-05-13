@@ -30,6 +30,8 @@ public class WowImporterEditor : ModuleRules
 				"MeshDescription",
 				"StaticMeshDescription",
 				"SkeletalMeshDescription",
+				"SkeletalMeshUtilitiesCommon",
+				"AnimationCore",
 				"HTTP",
 				"WorkspaceMenuStructure",
 				"DesktopPlatform",

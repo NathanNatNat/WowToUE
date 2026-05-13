@@ -13,7 +13,6 @@ class FWowModelPreviewClient : public FEditorViewportClient
 public:
 	FWowModelPreviewClient(FAdvancedPreviewScene& InPreviewScene, const TSharedRef<SEditorViewport>& InViewport);
 	virtual void Tick(float DeltaSeconds) override;
-
 	TFunction<void(float)> OnTick;
 };
 
@@ -39,7 +38,6 @@ public:
 	bool HasTextureUnit(int32 Index) const;
 	FString GetGeosetLabel(int32 Index) const;
 
-	// Animation control
 	void PlayAnimation(int32 AnimIndex);
 	void StopAnimation();
 	void SetAnimationPaused(bool bPaused);
@@ -53,6 +51,7 @@ private:
 	virtual TSharedRef<FEditorViewportClient> MakeEditorViewportClient() override;
 
 	void RebuildMesh(bool bFitCamera = false);
+	void UpdateBoneTransforms();
 	void TickAnimation(float DeltaSeconds);
 	UTexture2D* CreateTextureFromBLP(uint32 FileDataID, uint32 WrapFlags = 0);
 	UMaterial* CreateUnlitMaterial(UTexture2D* Texture, uint16 BlendMode = 0, uint16 MaterialFlags = 0x05);
@@ -60,13 +59,16 @@ private:
 	TSharedPtr<FAdvancedPreviewScene> PreviewScene;
 	TSharedPtr<FWowModelPreviewClient> ViewportClient;
 
-	class UStaticMeshComponent* MeshComponent = nullptr;
-	class UStaticMesh* PreviewMesh = nullptr;
+	class UPoseableMeshComponent* MeshComponent = nullptr;
+	class USkeletalMesh* PreviewMesh = nullptr;
+	class USkeleton* PreviewSkeleton = nullptr;
 
+	TMap<uint32, UTexture2D*> TextureCache;
 	TArray<bool> SubMeshVisible;
 	TArray<uint16> SubMeshIDs;
 	TArray<FString> SubMeshLabels;
 	FWowM2ModelData CurrentModelData;
 
 	TSharedPtr<FWowM2Animator> Animator;
+	bool bAnimationPlaying = false;
 };
