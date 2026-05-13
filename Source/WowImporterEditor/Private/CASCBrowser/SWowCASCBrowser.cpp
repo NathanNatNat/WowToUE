@@ -5,6 +5,7 @@
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SSplitter.h"
 #include "Widgets/Layout/SGridPanel.h"
+#include "Widgets/Layout/SExpandableArea.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SButton.h"
@@ -797,6 +798,50 @@ void SWowCASCBrowser::BuildGeosetPanel()
 			.Font(FCoreStyle::GetDefaultFontStyle("Regular", 9))
 		]
 	];
+
+	// Bone list (collapsible)
+	int32 NumBones = ModelPreview->GetNumBones();
+	if (NumBones > 0)
+	{
+		TSharedPtr<SVerticalBox> BoneListBox;
+		GeosetPanel->AddSlot()
+		.AutoHeight()
+		.Padding(4, 8, 4, 0)
+		[
+			SNew(SExpandableArea)
+			.AreaTitle(FText::Format(LOCTEXT("BoneListTitle", "Bones ({0})"), FText::AsNumber(NumBones)))
+			.InitiallyCollapsed(true)
+			.HeaderPadding(FMargin(2, 4))
+			.BodyContent()
+			[
+				SNew(SBox)
+				.MaxDesiredHeight(300.f)
+				[
+					SNew(SScrollBox)
+					+ SScrollBox::Slot()
+					[
+						SAssignNew(BoneListBox, SVerticalBox)
+					]
+				]
+			]
+		];
+
+		for (int32 i = 0; i < NumBones; ++i)
+		{
+			int32 Depth = ModelPreview->GetBoneDepth(i);
+			FName BoneName = ModelPreview->GetBoneName(i);
+
+			BoneListBox->AddSlot()
+			.AutoHeight()
+			.Padding(4 + Depth * 12, 1, 4, 1)
+			[
+				SNew(STextBlock)
+				.Text(FText::FromName(BoneName))
+				.Font(FCoreStyle::GetDefaultFontStyle("Regular", 8))
+				.ColorAndOpacity(FSlateColor(FLinearColor(0.8f, 0.8f, 0.8f)))
+			];
+		}
+	}
 
 	GeosetPanel->SetVisibility(EVisibility::Visible);
 }

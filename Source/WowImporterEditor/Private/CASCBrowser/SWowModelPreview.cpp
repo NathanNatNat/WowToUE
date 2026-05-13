@@ -17,6 +17,7 @@
 #include "SkinWeightsAttributesRef.h"
 #include "StaticToSkeletalMeshConverter.h"
 #include "BoneWeights.h"
+#include "SkeletalDebugRendering.h"
 
 FWowModelPreviewClient::FWowModelPreviewClient(FAdvancedPreviewScene& InPreviewScene, const TSharedRef<SEditorViewport>& InViewport)
 	: FEditorViewportClient(nullptr, &InPreviewScene, InViewport)
@@ -558,25 +559,49 @@ void SWowModelPreview::DrawBones(FPrimitiveDrawInterface* PDI)
 	if (!bShowBones || !MeshComponent || !PDI) return;
 
 	const int32 NumBones = MeshComponent->GetNumBones();
-	const FTransform CompTransform = MeshComponent->GetComponentTransform();
+
+	TArray<TArray<int32>> Children;
+	Children.SetNum(NumBones);
+	for (int32 i = 0; i < NumBones; ++i)
+	{
+		int32 ParentIdx = (i < CurrentModelData.Bones.Num()) ? CurrentModelData.Bones[i].ParentIndex : -1;
+		if (ParentIdx >= 0 && ParentIdx < NumBones)
+			Children[ParentIdx].Add(i);
+	}
+
+	const FLinearColor BoneColor(0.9f, 0.9f, 0.9f);
+	const FLinearColor ChildColor(0.8f, 0.8f, 0.8f);
 
 	for (int32 i = 0; i < NumBones; ++i)
 	{
 		FTransform BoneTransform = MeshComponent->GetBoneTransform(i);
-		FVector BonePos = BoneTransform.GetLocation();
 
-		// Draw bone point
-		PDI->DrawPoint(BonePos, FLinearColor::Yellow, 4.0f, SDPG_Foreground);
-
-		// Draw line to parent
-		int32 ParentIdx = (i < CurrentModelData.Bones.Num()) ? CurrentModelData.Bones[i].ParentIndex : -1;
-		if (ParentIdx >= 0 && ParentIdx < NumBones)
+		TArray<FVector> ChildLocations;
+		TArray<FLinearColor> ChildColors;
+		for (int32 ChildIdx : Children[i])
 		{
-			FTransform ParentTransform = MeshComponent->GetBoneTransform(ParentIdx);
-			FVector ParentPos = ParentTransform.GetLocation();
-			PDI->DrawLine(ParentPos, BonePos, FLinearColor::Green, SDPG_Foreground);
+			ChildLocations.Add(MeshComponent->GetBoneTransform(ChildIdx).GetLocation());
+			ChildColors.Add(ChildColor);
 		}
+
+		SkeletalDebugRendering::DrawWireBoneAdvanced(
+			PDI, BoneTransform, ChildLocations, ChildColors,
+			BoneColor, SDPG_Foreground, 1.0f, FBoneAxisDrawConfig());
 	}
+}
+
+int32 SWowModelPreview::GetBoneDepth(int32 Index) const
+{
+	int32 Depth = 0;
+	int32 Curr = Index;
+	while (Curr >= 0 && Curr < CurrentModelData.Bones.Num())
+	{
+		int32 Parent = CurrentModelData.Bones[Curr].ParentIndex;
+		if (Parent < 0 || Parent >= Curr) break;
+		Curr = Parent;
+		++Depth;
+	}
+	return Depth;
 }
 
 uint16 SWowModelPreview::GetSubMeshID(int32 Index) const

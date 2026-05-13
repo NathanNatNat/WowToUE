@@ -53,6 +53,11 @@ public:
 	bool bSkeletonEnabled = true;
 	void SetSkeletonEnabled(bool bEnabled);
 
+	int32 GetNumBones() const { return CurrentModelData.Bones.Num(); }
+	FName GetBoneName(int32 Index) const { return CurrentModelData.Bones.IsValidIndex(Index) ? CurrentModelData.Bones[Index].BoneName : NAME_None; }
+	int32 GetBoneParent(int32 Index) const { return CurrentModelData.Bones.IsValidIndex(Index) ? CurrentModelData.Bones[Index].ParentIndex : -1; }
+	int32 GetBoneDepth(int32 Index) const;
+
 private:
 	void DrawBones(FPrimitiveDrawInterface* PDI);
 	virtual TSharedRef<FEditorViewportClient> MakeEditorViewportClient() override;
