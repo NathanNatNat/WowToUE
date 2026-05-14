@@ -287,13 +287,11 @@ UMaterial* SWowModelPreview::CreateCombinerMaterial(const TArray<UTexture2D*>& T
 		"da = saturate(da * MA);\n"
 	), CombinerID);
 
-	// Main node — WoW-style lighting + screen blend for glow
-	// MA (MeshAlpha) only affects da (opacity for masked/translucent), not color brightness
-	// Visibility is handled by material swap to invisible material when alpha=0
+	// Main node — WoW-style lighting: diffuse darkened, spec additive (matches retail WoW)
 	CustomNode->OutputType = CMOT_Float4;
 	CustomNode->Code = CombinerBody + TEXT(
 		"float3 litDiff = diff * 0.55;\n"
-		"float3 result = litDiff + spec * (1.0 - litDiff);\n"
+		"float3 result = litDiff + spec;\n"
 		"return float4(result, da);\n"
 	);
 
