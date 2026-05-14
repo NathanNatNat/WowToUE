@@ -36,17 +36,29 @@ public:
 	{
 		FLinearColor Color = FLinearColor::White;
 		float Alpha = 1.f;
+		FVector TexSampleAlpha = FVector::OneVector;
+		bool bApplyWeight = true;
+	};
+
+	struct FTexTransformData
+	{
+		FVector4 Row0 = FVector4(1, 0, 0, 0);
+		FVector4 Row1 = FVector4(0, 1, 0, 0);
 	};
 
 	const TArray<FTransform>& GetBoneLocalTransforms() const { return BoneLocalTransforms; }
 	const TArray<float>& GetSubmeshAlphas() const { return SubmeshAlphas; }
 	const TArray<FSubmeshAnimData>& GetSubmeshAnimData() const { return SubmeshAnimData; }
-	void SetSubmeshInfo(const TArray<int32>& InColorIndices, const TArray<int32>& InTexWeightIndices);
+	const TArray<FTexTransformData>& GetTexTransforms() const { return TexTransformMatrices; }
+	void SetSubmeshInfo(const TArray<int32>& InColorIndices, const TArray<int32>& InTexWeightIndices,
+		const TArray<int32>& InTexWeightIndices1, const TArray<int32>& InTexWeightIndices2,
+		const TArray<uint8>& InTUFlags);
 	bool IsPlaying() const { return bIsPlaying; }
 
 private:
 	void CalcAllBones();
 	void CalcSubmeshAlphas();
+	void CalcTexTransforms();
 
 	FVector SampleVec3(int32 BoneIndex, int32 TrackType, int32 AnimIdx, float TimeMs, const FVector& Default);
 	FQuat SampleQuat(int32 BoneIndex, int32 AnimIdx, float TimeMs);
@@ -72,6 +84,10 @@ private:
 
 	TArray<int32> SubmeshColorIndices;
 	TArray<int32> SubmeshTexWeightIndices;
+	TArray<int32> SubmeshTexWeightIndices1;
+	TArray<int32> SubmeshTexWeightIndices2;
+	TArray<uint8> SubmeshTUFlags;
 	TArray<float> SubmeshAlphas;
 	TArray<FSubmeshAnimData> SubmeshAnimData;
+	TArray<FTexTransformData> TexTransformMatrices;
 };

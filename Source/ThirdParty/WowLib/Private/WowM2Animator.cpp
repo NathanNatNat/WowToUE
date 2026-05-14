@@ -120,6 +120,7 @@ void FWowM2Animator::PlayAnimation(int32 AnimIndex)
 
 	CalcAllBones();
 	CalcSubmeshAlphas();
+	CalcTexTransforms();
 }
 
 void FWowM2Animator::StopAnimation()
@@ -140,6 +141,7 @@ void FWowM2Animator::StopAnimation()
 		CurrentAnimSource = SkelLoader;
 		CalcAllBones();
 		CalcSubmeshAlphas();
+		CalcTexTransforms();
 
 		CurrentAnimation = -1;
 		CurrentAnimIndex = -1;
@@ -175,6 +177,7 @@ void FWowM2Animator::Update(float DeltaTimeSeconds)
 
 	CalcAllBones();
 	CalcSubmeshAlphas();
+	CalcTexTransforms();
 }
 
 float FWowM2Animator::GetDuration() const
@@ -207,6 +210,7 @@ void FWowM2Animator::SetFrame(int32 Frame)
 	AnimationTime = (static_cast<float>(Frame) / Count) * GetDuration();
 	CalcAllBones();
 	CalcSubmeshAlphas();
+	CalcTexTransforms();
 }
 
 void FWowM2Animator::StepFrame(int32 Delta)
@@ -366,10 +370,15 @@ FQuat FWowM2Animator::SampleQuat(int32 BoneIndex, int32 AnimIdx, float TimeMs)
 	return FQuat::Slerp(Q0, Q1, Alpha);
 }
 
-void FWowM2Animator::SetSubmeshInfo(const TArray<int32>& InColorIndices, const TArray<int32>& InTexWeightIndices)
+void FWowM2Animator::SetSubmeshInfo(const TArray<int32>& InColorIndices, const TArray<int32>& InTexWeightIndices,
+	const TArray<int32>& InTexWeightIndices1, const TArray<int32>& InTexWeightIndices2,
+	const TArray<uint8>& InTUFlags)
 {
 	SubmeshColorIndices = InColorIndices;
 	SubmeshTexWeightIndices = InTexWeightIndices;
+	SubmeshTexWeightIndices1 = InTexWeightIndices1;
+	SubmeshTexWeightIndices2 = InTexWeightIndices2;
+	SubmeshTUFlags = InTUFlags;
 	int32 Count = InColorIndices.Num();
 	SubmeshAlphas.SetNumUninitialized(Count);
 	SubmeshAnimData.SetNum(Count);
@@ -420,6 +429,94 @@ static float SampleTrackFloat(const M2Track& Track, int32 AnimIdx, float TimeMs,
 	return FMath::Lerp(V0, V1, Alpha);
 }
 
+static float SampleTrackWithGlobalSeq(const M2Track& Track, int32 AnimIdx, float TimeMs, float Default,
+	const TArray<float>& GlobalSeqTimes)
+{
+	int32 EffAnimIdx = AnimIdx;
+	float EffTimeMs = TimeMs;
+
+	if (Track.globalSeq > 0)
+	{
+		EffAnimIdx = 0;
+		int32 GSIdx = Track.globalSeq - 1;
+		EffTimeMs = GlobalSeqTimes.IsValidIndex(GSIdx) ? GlobalSeqTimes[GSIdx] : 0.f;
+	}
+
+	return SampleTrackFloat(Track, EffAnimIdx, EffTimeMs, Default);
+}
+
+static FVector SampleVec3TrackWithGlobalSeq(const M2Track& Track, int32 AnimIdx, float TimeMs, const FVector& Default,
+	const TArray<float>& GlobalSeqTimes)
+{
+	int32 EffAnimIdx = AnimIdx;
+	float EffTimeMs = TimeMs;
+
+	if (Track.globalSeq > 0)
+	{
+		EffAnimIdx = 0;
+		int32 GSIdx = Track.globalSeq - 1;
+		EffTimeMs = GlobalSeqTimes.IsValidIndex(GSIdx) ? GlobalSeqTimes[GSIdx] : 0.f;
+	}
+
+	if (EffAnimIdx < 0 || EffAnimIdx >= static_cast<int32>(Track.timestamps.size()))
+		return Default;
+
+	const auto& Timestamps = Track.timestamps[EffAnimIdx];
+	const auto& Values = Track.values[EffAnimIdx];
+	if (Timestamps.empty() || Values.empty()) return Default;
+
+	if (Timestamps.size() == 1 || EffTimeMs <= GetTimestampMs(Timestamps[0]))
+		return GetVec3(Values[0], Default);
+	if (EffTimeMs >= GetTimestampMs(Timestamps.back()))
+		return GetVec3(Values.back(), Default);
+
+	int32 Frame = FindKeyframe(Timestamps, EffTimeMs);
+	if (Track.interpolation == 0)
+		return GetVec3(Values[Frame], Default);
+
+	float T0 = GetTimestampMs(Timestamps[Frame]);
+	float T1 = GetTimestampMs(Timestamps[Frame + 1]);
+	float Dt = T1 - T0;
+	float Alpha = Dt > 0.f ? FMath::Min((EffTimeMs - T0) / Dt, 1.f) : 0.f;
+	return FMath::Lerp(GetVec3(Values[Frame], Default), GetVec3(Values[Frame + 1], Default), Alpha);
+}
+
+static FQuat SampleQuatTrackWithGlobalSeq(const M2Track& Track, int32 AnimIdx, float TimeMs,
+	const TArray<float>& GlobalSeqTimes)
+{
+	int32 EffAnimIdx = AnimIdx;
+	float EffTimeMs = TimeMs;
+
+	if (Track.globalSeq > 0)
+	{
+		EffAnimIdx = 0;
+		int32 GSIdx = Track.globalSeq - 1;
+		EffTimeMs = GlobalSeqTimes.IsValidIndex(GSIdx) ? GlobalSeqTimes[GSIdx] : 0.f;
+	}
+
+	if (EffAnimIdx < 0 || EffAnimIdx >= static_cast<int32>(Track.timestamps.size()))
+		return FQuat::Identity;
+
+	const auto& Timestamps = Track.timestamps[EffAnimIdx];
+	const auto& Values = Track.values[EffAnimIdx];
+	if (Timestamps.empty() || Values.empty()) return FQuat::Identity;
+
+	if (Timestamps.size() == 1 || EffTimeMs <= GetTimestampMs(Timestamps[0]))
+		return GetQuat(Values[0]);
+	if (EffTimeMs >= GetTimestampMs(Timestamps.back()))
+		return GetQuat(Values.back());
+
+	int32 Frame = FindKeyframe(Timestamps, EffTimeMs);
+	if (Track.interpolation == 0)
+		return GetQuat(Values[Frame]);
+
+	float T0 = GetTimestampMs(Timestamps[Frame]);
+	float T1 = GetTimestampMs(Timestamps[Frame + 1]);
+	float Dt = T1 - T0;
+	float Alpha = Dt > 0.f ? FMath::Min((EffTimeMs - T0) / Dt, 1.f) : 0.f;
+	return FQuat::Slerp(GetQuat(Values[Frame]), GetQuat(Values[Frame + 1]), Alpha);
+}
+
 void FWowM2Animator::CalcSubmeshAlphas()
 {
 	if (!Loader || SubmeshAlphas.Num() == 0) return;
@@ -435,50 +532,151 @@ void FWowM2Animator::CalcSubmeshAlphas()
 		int32 ColorIdx = SubmeshColorIndices.IsValidIndex(i) ? SubmeshColorIndices[i] : -1;
 		if (ColorIdx >= 0 && ColorIdx < static_cast<int32>(Loader->colors.size()))
 		{
-			float A = SampleTrackFloat(Loader->colors[ColorIdx].alpha, AnimIdx, TimeMs, 32767.f);
+			float A = SampleTrackWithGlobalSeq(Loader->colors[ColorIdx].alpha, AnimIdx, TimeMs, 32767.f, GlobalSeqTimes);
 			ColorAlpha = A / 32768.f;
 
-			// Sample color RGB track
-			FVector RGB = SampleVec3(0, 0, AnimIdx, TimeMs, FVector(1, 1, 1));
 			const M2Track& ColorTrack = Loader->colors[ColorIdx].color;
-			if (AnimIdx >= 0 && AnimIdx < static_cast<int32>(ColorTrack.timestamps.size()) && !ColorTrack.timestamps[AnimIdx].empty())
-			{
-				FVector C = FVector::OneVector;
-				if (ColorTrack.values[AnimIdx].size() == 1 || TimeMs <= GetTimestampMs(ColorTrack.timestamps[AnimIdx][0]))
-					C = GetVec3(ColorTrack.values[AnimIdx][0], FVector::OneVector);
-				else if (TimeMs >= GetTimestampMs(ColorTrack.timestamps[AnimIdx].back()))
-					C = GetVec3(ColorTrack.values[AnimIdx].back(), FVector::OneVector);
-				else
-				{
-					int32 Frame = FindKeyframe(ColorTrack.timestamps[AnimIdx], TimeMs);
-					float T0 = GetTimestampMs(ColorTrack.timestamps[AnimIdx][Frame]);
-					float T1 = GetTimestampMs(ColorTrack.timestamps[AnimIdx][Frame + 1]);
-					float Dt = T1 - T0;
-					float Frac = Dt > 0.f ? FMath::Min((TimeMs - T0) / Dt, 1.f) : 0.f;
-					FVector V0 = GetVec3(ColorTrack.values[AnimIdx][Frame], FVector::OneVector);
-					FVector V1 = GetVec3(ColorTrack.values[AnimIdx][Frame + 1], FVector::OneVector);
-					C = FMath::Lerp(V0, V1, Frac);
-				}
-				ColorRGB = FLinearColor(C.X, C.Y, C.Z);
-			}
+			FVector C = SampleVec3TrackWithGlobalSeq(ColorTrack, AnimIdx, TimeMs, FVector::OneVector, GlobalSeqTimes);
+			ColorRGB = FLinearColor(C.X, C.Y, C.Z);
 		}
 
-		float TexWeight = 1.f;
-		int32 WeightIdx = SubmeshTexWeightIndices.IsValidIndex(i) ? SubmeshTexWeightIndices[i] : -1;
-		if (WeightIdx >= 0 && WeightIdx < static_cast<int32>(Loader->textureWeights.size()))
-		{
-			float W = SampleTrackFloat(Loader->textureWeights[WeightIdx], AnimIdx, TimeMs, 32767.f);
-			TexWeight = W / 32768.f;
-		}
+		auto SampleWeight = [&](int32 WeightIdx) -> float {
+			if (WeightIdx < 0 || WeightIdx >= static_cast<int32>(Loader->textureWeights.size()))
+				return 1.f;
+			float W = SampleTrackWithGlobalSeq(Loader->textureWeights[WeightIdx], AnimIdx, TimeMs, 32767.f, GlobalSeqTimes);
+			return W / 32768.f;
+		};
 
-		float FinalAlpha = ColorAlpha * TexWeight;
+		float TexWeight0 = SampleWeight(SubmeshTexWeightIndices.IsValidIndex(i) ? SubmeshTexWeightIndices[i] : -1);
+		float TexWeight1 = SampleWeight(SubmeshTexWeightIndices1.IsValidIndex(i) ? SubmeshTexWeightIndices1[i] : -1);
+		float TexWeight2 = SampleWeight(SubmeshTexWeightIndices2.IsValidIndex(i) ? SubmeshTexWeightIndices2[i] : -1);
+
+		bool bApplyWeight = !(SubmeshTUFlags.IsValidIndex(i) && (SubmeshTUFlags[i] & 0x40));
+
+		float FinalAlpha = ColorAlpha;
+		if (bApplyWeight)
+			FinalAlpha *= TexWeight0;
+
 		SubmeshAlphas[i] = FinalAlpha;
 
 		if (SubmeshAnimData.IsValidIndex(i))
 		{
 			SubmeshAnimData[i].Color = ColorRGB;
 			SubmeshAnimData[i].Alpha = FinalAlpha;
+			SubmeshAnimData[i].TexSampleAlpha = FVector(TexWeight0, TexWeight1, TexWeight2);
+			SubmeshAnimData[i].bApplyWeight = bApplyWeight;
 		}
+	}
+}
+
+void FWowM2Animator::CalcTexTransforms()
+{
+	if (!Loader) return;
+
+	const float TimeMs = AnimationTime * 1000.f;
+	const int32 AnimIdx = CurrentAnimIndex;
+	const int32 NumTransforms = static_cast<int32>(Loader->textureTransforms.size());
+
+	TexTransformMatrices.SetNum(NumTransforms);
+
+	for (int32 i = 0; i < NumTransforms; ++i)
+	{
+		const auto& TT = Loader->textureTransforms[i];
+
+		// Composition order matches WebWowViewerCpp animationManager.cpp:
+		// Identity → T(pivot) → Rotate → T(-pivot) → T(pivot) → Scale → T(-pivot) → Translate
+		// Pivot = (0.5, 0.5) in UV space
+
+		float M[16];
+		FMemory::Memzero(M, sizeof(M));
+		M[0] = M[5] = M[10] = M[15] = 1.f;
+
+		auto Mat4Mul = [](float* out, const float* a, const float* b) {
+			float tmp[16];
+			for (int c = 0; c < 4; ++c)
+				for (int r = 0; r < 4; ++r)
+					tmp[c * 4 + r] = a[0 * 4 + r] * b[c * 4 + 0] + a[1 * 4 + r] * b[c * 4 + 1]
+						+ a[2 * 4 + r] * b[c * 4 + 2] + a[3 * 4 + r] * b[c * 4 + 3];
+			FMemory::Memcpy(out, tmp, sizeof(tmp));
+		};
+
+		auto Mat4Trans = [](float* m, float x, float y, float z) {
+			FMemory::Memzero(m, 16 * sizeof(float));
+			m[0] = m[5] = m[10] = m[15] = 1.f;
+			m[12] = x; m[13] = y; m[14] = z;
+		};
+
+		auto Mat4Scale = [](float* m, float x, float y, float z) {
+			FMemory::Memzero(m, 16 * sizeof(float));
+			m[0] = x; m[5] = y; m[10] = z; m[15] = 1.f;
+		};
+
+		auto Mat4Quat = [](float* m, float qx, float qy, float qz, float qw) {
+			float x2 = qx + qx, y2 = qy + qy, z2 = qz + qz;
+			float xx = qx * x2, xy = qx * y2, xz = qx * z2;
+			float yy = qy * y2, yz = qy * z2, zz = qz * z2;
+			float wx = qw * x2, wy = qw * y2, wz = qw * z2;
+			m[0] = 1-(yy+zz); m[1] = xy+wz;     m[2] = xz-wy;     m[3] = 0;
+			m[4] = xy-wz;     m[5] = 1-(xx+zz); m[6] = yz+wx;     m[7] = 0;
+			m[8] = xz+wy;     m[9] = yz-wx;     m[10] = 1-(xx+yy); m[11] = 0;
+			m[12] = 0;         m[13] = 0;         m[14] = 0;         m[15] = 1;
+		};
+
+		float tmp[16], p[16], np[16];
+		const float Px = 0.5f, Py = 0.5f;
+
+		bool bHasRot = !TT.rotation.timestamps.empty();
+		bool bHasScale = !TT.scaling.timestamps.empty();
+		bool bHasTrans = !TT.translation.timestamps.empty();
+
+		if (bHasRot)
+		{
+			Mat4Trans(p, Px, Py, 0.f);
+			Mat4Mul(tmp, M, p);
+			FMemory::Memcpy(M, tmp, sizeof(M));
+
+			FQuat Q = SampleQuatTrackWithGlobalSeq(TT.rotation, AnimIdx, TimeMs, GlobalSeqTimes);
+			float r[16];
+			Mat4Quat(r, Q.X, Q.Y, Q.Z, Q.W);
+			Mat4Mul(tmp, M, r);
+			FMemory::Memcpy(M, tmp, sizeof(M));
+
+			Mat4Trans(np, -Px, -Py, 0.f);
+			Mat4Mul(tmp, M, np);
+			FMemory::Memcpy(M, tmp, sizeof(M));
+		}
+
+		if (bHasScale)
+		{
+			Mat4Trans(p, Px, Py, 0.f);
+			Mat4Mul(tmp, M, p);
+			FMemory::Memcpy(M, tmp, sizeof(M));
+
+			FVector S = SampleVec3TrackWithGlobalSeq(TT.scaling, AnimIdx, TimeMs, FVector::OneVector, GlobalSeqTimes);
+			float s[16];
+			Mat4Scale(s, S.X, S.Y, S.Z);
+			Mat4Mul(tmp, M, s);
+			FMemory::Memcpy(M, tmp, sizeof(M));
+
+			Mat4Trans(np, -Px, -Py, 0.f);
+			Mat4Mul(tmp, M, np);
+			FMemory::Memcpy(M, tmp, sizeof(M));
+		}
+
+		if (bHasTrans)
+		{
+			FVector T = SampleVec3TrackWithGlobalSeq(TT.translation, AnimIdx, TimeMs, FVector::ZeroVector, GlobalSeqTimes);
+			float t[16];
+			Mat4Trans(t, T.X, T.Y, T.Z);
+			Mat4Mul(tmp, M, t);
+			FMemory::Memcpy(M, tmp, sizeof(M));
+		}
+
+		// Extract the two rows needed for 2D UV transform:
+		// result.x = M[0]*u + M[4]*v + M[8]*0 + M[12]*1 (column-major)
+		// result.y = M[1]*u + M[5]*v + M[9]*0 + M[13]*1
+		TexTransformMatrices[i].Row0 = FVector4(M[0], M[4], M[8], M[12]);
+		TexTransformMatrices[i].Row1 = FVector4(M[1], M[5], M[9], M[13]);
 	}
 }
 

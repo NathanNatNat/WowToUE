@@ -18,6 +18,13 @@
 #include "Materials/MaterialExpressionMultiply.h"
 #include "Materials/MaterialExpressionCustom.h"
 #include "Materials/MaterialExpressionAdd.h"
+#include "Materials/MaterialExpressionTextureCoordinate.h"
+#include "Materials/MaterialExpressionWorldPosition.h"
+#include "Materials/MaterialExpressionVertexNormalWS.h"
+#include "Materials/MaterialExpressionTransformPosition.h"
+#include "Materials/MaterialExpressionTransform.h"
+#include "Materials/MaterialExpressionAppendVector.h"
+#include "Materials/MaterialExpressionComponentMask.h"
 #include "MeshDescription.h"
 #include "SkeletalMeshAttributes.h"
 #include "SkinWeightsAttributesRef.h"
@@ -175,10 +182,10 @@ UTexture2D* SWowModelPreview::CreateTextureFromBLP(uint32 FileDataID, uint32 Wra
 UMaterial* SWowModelPreview::CreateCombinerMaterial(const TArray<UTexture2D*>& Textures, int32 CombinerID, int32 VertexShaderID, uint16 BlendMode, uint16 MaterialFlags, bool bNeedsAlphaControl)
 {
 	UMaterial* Mat = NewObject<UMaterial>(GetTransientPackage(), NAME_None, RF_Transient);
-	bool bUnlit = (MaterialFlags & 0x01) != 0;
 	bool bTwoSided = (MaterialFlags & 0x04) != 0;
+	bool bNoDepthTest = (MaterialFlags & 0x08) != 0;
+	bool bNoDepthWrite = (MaterialFlags & 0x10) != 0;
 	Mat->TwoSided = bTwoSided;
-	Mat->SetShadingModel(bUnlit ? MSM_Unlit : MSM_DefaultLit);
 
 	switch (BlendMode)
 	{
@@ -191,27 +198,16 @@ UMaterial* SWowModelPreview::CreateCombinerMaterial(const TArray<UTexture2D*>& T
 	default: Mat->BlendMode = BLEND_Opaque; break;
 	}
 
-	// Combiners with emissive additive output need translucent or additive to show the glow
-	bool bHasEmissive = (CombinerID == 8 || CombinerID == 10 || CombinerID == 13 ||
-		CombinerID == 14 || CombinerID == 16 || CombinerID == 17 || CombinerID == 21);
-	if (bHasEmissive && BlendMode == 0)
-		Mat->BlendMode = BLEND_Opaque;
+	if (Mat->BlendMode == BLEND_Masked)
+		Mat->OpacityMaskClipValue = 0.502f;
+
+	if (bNoDepthWrite && (Mat->BlendMode == BLEND_Translucent || Mat->BlendMode == BLEND_Additive))
+		Mat->bDisableDepthTest = bNoDepthTest;
 
 	Mat->bUsedWithSkeletalMesh = true;
+	Mat->SetShadingModel(MSM_Unlit);
 
-	// Texture samplers (up to 4)
-	TArray<UMaterialExpressionTextureSample*> TexNodes;
-	for (int32 i = 0; i < FMath::Min(Textures.Num(), 4); ++i)
-	{
-		if (!Textures[i]) continue;
-		auto* TexNode = NewObject<UMaterialExpressionTextureSample>(Mat);
-		TexNode->Texture = Textures[i];
-		TexNode->SamplerType = SAMPLERTYPE_Color;
-		Mat->GetExpressionCollection().AddExpression(TexNode);
-		TexNodes.Add(TexNode);
-	}
-
-	// MeshColor and MeshAlpha parameters
+	// === Parameters ===
 	auto* ColorParam = NewObject<UMaterialExpressionVectorParameter>(Mat);
 	ColorParam->ParameterName = TEXT("MeshColor");
 	ColorParam->DefaultValue = FLinearColor::White;
@@ -222,94 +218,324 @@ UMaterial* SWowModelPreview::CreateCombinerMaterial(const TArray<UTexture2D*>& T
 	AlphaParam->DefaultValue = 1.f;
 	Mat->GetExpressionCollection().AddExpression(AlphaParam);
 
-	// Custom HLSL combiner node
-	auto* CustomNode = NewObject<UMaterialExpressionCustom>(Mat);
-	CustomNode->OutputType = CMOT_Float4;
-	CustomNode->Description = TEXT("M2Combiner");
+	auto* TSAParam = NewObject<UMaterialExpressionVectorParameter>(Mat);
+	TSAParam->ParameterName = TEXT("TexSampleAlpha");
+	TSAParam->DefaultValue = FLinearColor(1, 1, 1);
+	Mat->GetExpressionCollection().AddExpression(TSAParam);
 
-	// Create constant white for missing texture slots
+	auto* TM0R0 = NewObject<UMaterialExpressionVectorParameter>(Mat);
+	TM0R0->ParameterName = TEXT("TM0R0");
+	TM0R0->DefaultValue = FLinearColor(1, 0, 0, 0);
+	Mat->GetExpressionCollection().AddExpression(TM0R0);
+
+	auto* TM0R1 = NewObject<UMaterialExpressionVectorParameter>(Mat);
+	TM0R1->ParameterName = TEXT("TM0R1");
+	TM0R1->DefaultValue = FLinearColor(0, 1, 0, 0);
+	Mat->GetExpressionCollection().AddExpression(TM0R1);
+
+	auto* TM1R0 = NewObject<UMaterialExpressionVectorParameter>(Mat);
+	TM1R0->ParameterName = TEXT("TM1R0");
+	TM1R0->DefaultValue = FLinearColor(1, 0, 0, 0);
+	Mat->GetExpressionCollection().AddExpression(TM1R0);
+
+	auto* TM1R1 = NewObject<UMaterialExpressionVectorParameter>(Mat);
+	TM1R1->ParameterName = TEXT("TM1R1");
+	TM1R1->DefaultValue = FLinearColor(0, 1, 0, 0);
+	Mat->GetExpressionCollection().AddExpression(TM1R1);
+
 	auto* WhiteConst = NewObject<UMaterialExpressionConstant>(Mat);
 	WhiteConst->R = 1.f;
 	Mat->GetExpressionCollection().AddExpression(WhiteConst);
 
-	// Inputs: tex1 RGB, tex1 alpha, tex2 RGB, tex2 alpha, meshColor, meshAlpha
+	// === UV Computation Node ===
+	// Implements all 19 vertex shader modes: UV channel selection, env mapping, texture transforms
+	auto* UV0Node = NewObject<UMaterialExpressionTextureCoordinate>(Mat);
+	UV0Node->CoordinateIndex = 0;
+	Mat->GetExpressionCollection().AddExpression(UV0Node);
+
+	auto* UV1Node = NewObject<UMaterialExpressionTextureCoordinate>(Mat);
+	UV1Node->CoordinateIndex = 1;
+	Mat->GetExpressionCollection().AddExpression(UV1Node);
+
+	// View-space position for env mapping
+	auto* WorldPosNode = NewObject<UMaterialExpressionWorldPosition>(Mat);
+	WorldPosNode->WorldPositionShaderOffset = WPT_Default;
+	Mat->GetExpressionCollection().AddExpression(WorldPosNode);
+
+	auto* TransformPosNode = NewObject<UMaterialExpressionTransformPosition>(Mat);
+	TransformPosNode->TransformSourceType = TRANSFORMPOSSOURCE_World;
+	TransformPosNode->TransformType = TRANSFORMPOSSOURCE_View;
+	TransformPosNode->Input.Expression = WorldPosNode;
+	Mat->GetExpressionCollection().AddExpression(TransformPosNode);
+
+	// View-space normal for env mapping
+	auto* WorldNormalNode = NewObject<UMaterialExpressionVertexNormalWS>(Mat);
+	Mat->GetExpressionCollection().AddExpression(WorldNormalNode);
+
+	auto* TransformNormalNode = NewObject<UMaterialExpressionTransform>(Mat);
+	TransformNormalNode->TransformSourceType = TRANSFORMSOURCE_World;
+	TransformNormalNode->TransformType = TRANSFORM_View;
+	TransformNormalNode->Input.Expression = WorldNormalNode;
+	Mat->GetExpressionCollection().AddExpression(TransformNormalNode);
+
+	// UV computation custom node — outputs float4(uv1.xy, uv2.xy), additional outputs for uv3 and edgeFade
+	auto* UVNode = NewObject<UMaterialExpressionCustom>(Mat);
+	UVNode->OutputType = CMOT_Float4;
+	UVNode->Description = TEXT("M2UVCompute");
+
+	UVNode->AdditionalOutputs.Empty();
+	FCustomOutput UV3Out;
+	UV3Out.OutputName = TEXT("OutUV3");
+	UV3Out.OutputType = CMOT_Float2;
+	UVNode->AdditionalOutputs.Add(UV3Out);
+
+	FCustomOutput EdgeOut;
+	EdgeOut.OutputName = TEXT("OutEdgeFade");
+	EdgeOut.OutputType = CMOT_Float1;
+	UVNode->AdditionalOutputs.Add(EdgeOut);
+
+	UVNode->Inputs.Empty();
+	UVNode->Inputs.SetNum(8);
+	UVNode->Inputs[0].InputName = TEXT("UV0"); UVNode->Inputs[0].Input.Expression = UV0Node;
+	UVNode->Inputs[1].InputName = TEXT("UV1"); UVNode->Inputs[1].Input.Expression = UV1Node;
+	UVNode->Inputs[2].InputName = TEXT("VP");  UVNode->Inputs[2].Input.Expression = TransformPosNode;
+	UVNode->Inputs[3].InputName = TEXT("VN");  UVNode->Inputs[3].Input.Expression = TransformNormalNode;
+	UVNode->Inputs[4].InputName = TEXT("TM0R0"); UVNode->Inputs[4].Input.Expression = TM0R0;
+	UVNode->Inputs[5].InputName = TEXT("TM0R1"); UVNode->Inputs[5].Input.Expression = TM0R1;
+	UVNode->Inputs[6].InputName = TEXT("TM1R0"); UVNode->Inputs[6].Input.Expression = TM1R0;
+	UVNode->Inputs[7].InputName = TEXT("TM1R1"); UVNode->Inputs[7].Input.Expression = TM1R1;
+
+	// UV computation HLSL — matches WebWowViewerCpp commonM2Material.glsl calcM2VertexMat()
+	UVNode->Code = FString::Printf(TEXT(
+		"float2 uv0 = UV0; float2 uv1 = UV1;\n"
+		"float3 vp = VP; float3 vn = VN;\n"
+		"\n"
+		"float3 viewDir = -normalize(vp);\n"
+		"float3 refl = reflect(viewDir, normalize(vn));\n"
+		"float3 envTmp = float3(refl.x, refl.y, refl.z + 1.0);\n"
+		"float2 envUV = -(normalize(envTmp).xy * 0.5) + float2(0.5, 0.5);\n"
+		"\n"
+		"float dotClamped = saturate(dot(normalize(vp), vn));\n"
+		"OutEdgeFade = saturate(2.7 * dotClamped * dotClamped - 0.4);\n"
+		"\n"
+		"float2 t0uv0 = float2(dot(TM0R0, float4(uv0, 0, 1)), dot(TM0R1, float4(uv0, 0, 1)));\n"
+		"float2 t0uv1 = float2(dot(TM0R0, float4(uv1, 0, 1)), dot(TM0R1, float4(uv1, 0, 1)));\n"
+		"float2 t1uv0 = float2(dot(TM1R0, float4(uv0, 0, 1)), dot(TM1R1, float4(uv0, 0, 1)));\n"
+		"float2 t1uv1 = float2(dot(TM1R0, float4(uv1, 0, 1)), dot(TM1R1, float4(uv1, 0, 1)));\n"
+		"\n"
+		"float2 outUV1 = t0uv0; float2 outUV2 = float2(0,0); OutUV3 = float2(0,0);\n"
+		"\n"
+		"int vs = %d;\n"
+		"if (vs == 0) { outUV1 = t0uv0; }\n"
+		"else if (vs == 1) { outUV1 = envUV; }\n"
+		"else if (vs == 2) { outUV1 = t0uv0; outUV2 = t1uv1; }\n"
+		"else if (vs == 3) { outUV1 = t0uv0; outUV2 = envUV; }\n"
+		"else if (vs == 4) { outUV1 = envUV; outUV2 = t0uv0; }\n"
+		"else if (vs == 5) { outUV1 = envUV; outUV2 = envUV; }\n"
+		"else if (vs == 6) { outUV1 = t0uv0; outUV2 = envUV; OutUV3 = t0uv0; }\n"
+		"else if (vs == 7) { outUV1 = t0uv0; outUV2 = t0uv0; }\n"
+		"else if (vs == 8) { outUV1 = t0uv0; outUV2 = t0uv0; OutUV3 = t0uv0; }\n"
+		"else if (vs == 9) { outUV1 = t0uv0; }\n"
+		"else if (vs == 10) { outUV1 = t1uv1; }\n"
+		"else if (vs == 11) { outUV1 = t0uv0; outUV2 = envUV; OutUV3 = t1uv1; }\n"
+		"else if (vs == 12) { outUV1 = t0uv0; outUV2 = t1uv1; }\n"
+		"else if (vs == 13) { outUV1 = envUV; }\n"
+		"else if (vs == 14) { outUV1 = t0uv0; outUV2 = t1uv1; OutUV3 = t0uv0; }\n"
+		"else if (vs == 15) { outUV1 = t0uv0; outUV2 = t1uv1; }\n"
+		"else if (vs == 16) { outUV1 = t1uv1; }\n"
+		"else if (vs == 17) { outUV1 = t0uv0; }\n"
+		"else if (vs == 18) { outUV1 = t0uv0; }\n"
+		"\n"
+		"if (vs != 9 && vs != 12 && vs != 13) OutEdgeFade = 1.0;\n"
+		"return float4(outUV1, outUV2);\n"
+	), VertexShaderID);
+
+	Mat->GetExpressionCollection().AddExpression(UVNode);
+
+	// === Extract computed UVs from the UV node ===
+	// Main output = float4(uv1.xy, uv2.xy)
+	// Additional output 0 = OutUV3 (float2)
+	// Additional output 1 = OutEdgeFade (float)
+
+	// Create component masks to extract UV1 and UV2 from the float4
+	auto* UV1Mask = NewObject<UMaterialExpressionComponentMask>(Mat);
+	UV1Mask->Input.Expression = UVNode;
+	UV1Mask->R = true; UV1Mask->G = true; UV1Mask->B = false; UV1Mask->A = false;
+	Mat->GetExpressionCollection().AddExpression(UV1Mask);
+
+	auto* UV2Mask = NewObject<UMaterialExpressionComponentMask>(Mat);
+	UV2Mask->Input.Expression = UVNode;
+	UV2Mask->R = false; UV2Mask->G = false; UV2Mask->B = true; UV2Mask->A = true;
+	Mat->GetExpressionCollection().AddExpression(UV2Mask);
+
+	// === Texture samplers using computed UVs ===
+	TArray<UMaterialExpressionTextureSample*> TexSamplers;
+	for (int32 i = 0; i < FMath::Min(Textures.Num(), 4); ++i)
+	{
+		if (!Textures[i])
+		{
+			TexSamplers.Add(nullptr);
+			continue;
+		}
+		auto* TexSample = NewObject<UMaterialExpressionTextureSample>(Mat);
+		TexSample->Texture = Textures[i];
+		TexSample->SamplerType = SAMPLERTYPE_Color;
+
+		// Wire computed UV to each texture sampler
+		if (i == 0)
+			TexSample->Coordinates.Expression = UV1Mask;
+		else if (i == 1)
+			TexSample->Coordinates.Expression = UV2Mask;
+		else if (i == 2)
+		{
+			TexSample->Coordinates.Expression = UVNode;
+			TexSample->Coordinates.OutputIndex = 1; // OutUV3
+		}
+		else
+		{
+			// Tex4: case 28 samples from inUv2 directly (UV2)
+			TexSample->Coordinates.Expression = UV2Mask;
+		}
+
+		Mat->GetExpressionCollection().AddExpression(TexSample);
+		TexSamplers.Add(TexSample);
+	}
+	while (TexSamplers.Num() < 4)
+		TexSamplers.Add(nullptr);
+
+	// === Combiner Custom HLSL node ===
+	auto* CustomNode = NewObject<UMaterialExpressionCustom>(Mat);
+	CustomNode->OutputType = CMOT_Float4;
+	CustomNode->Description = TEXT("M2Combiner");
+
 	CustomNode->Inputs.Empty();
-	CustomNode->Inputs.SetNum(6);
+	int32 InputIdx = 0;
 
-	CustomNode->Inputs[0].InputName = TEXT("Tex1");
-	CustomNode->Inputs[0].Input.Expression = (TexNodes.Num() > 0) ? static_cast<UMaterialExpression*>(TexNodes[0]) : WhiteConst;
+	auto AddTexInput = [&](const TCHAR* NameRGB, const TCHAR* NameA, int32 Slot) {
+		CustomNode->Inputs.SetNum(InputIdx + 2);
+		CustomNode->Inputs[InputIdx].InputName = NameRGB;
+		CustomNode->Inputs[InputIdx].Input.Expression = TexSamplers[Slot] ? static_cast<UMaterialExpression*>(TexSamplers[Slot]) : WhiteConst;
+		InputIdx++;
 
-	CustomNode->Inputs[1].InputName = TEXT("Tex1A");
-	if (TexNodes.Num() > 0) { CustomNode->Inputs[1].Input.Expression = TexNodes[0]; CustomNode->Inputs[1].Input.OutputIndex = 4; }
-	else { CustomNode->Inputs[1].Input.Expression = WhiteConst; }
+		CustomNode->Inputs[InputIdx].InputName = NameA;
+		if (TexSamplers[Slot]) { CustomNode->Inputs[InputIdx].Input.Expression = TexSamplers[Slot]; CustomNode->Inputs[InputIdx].Input.OutputIndex = 4; }
+		else { CustomNode->Inputs[InputIdx].Input.Expression = WhiteConst; }
+		InputIdx++;
+	};
 
-	CustomNode->Inputs[2].InputName = TEXT("Tex2");
-	CustomNode->Inputs[2].Input.Expression = (TexNodes.Num() > 1) ? static_cast<UMaterialExpression*>(TexNodes[1]) : WhiteConst;
+	AddTexInput(TEXT("Tex1"), TEXT("Tex1A"), 0);
+	AddTexInput(TEXT("Tex2"), TEXT("Tex2A"), 1);
+	AddTexInput(TEXT("Tex3"), TEXT("Tex3A"), 2);
+	AddTexInput(TEXT("Tex4"), TEXT("Tex4A"), 3);
 
-	CustomNode->Inputs[3].InputName = TEXT("Tex2A");
-	if (TexNodes.Num() > 1) { CustomNode->Inputs[3].Input.Expression = TexNodes[1]; CustomNode->Inputs[3].Input.OutputIndex = 4; }
-	else { CustomNode->Inputs[3].Input.Expression = WhiteConst; }
+	auto AddInput = [&](const TCHAR* Name, UMaterialExpression* Expr, int32 OutIdx = 0) {
+		CustomNode->Inputs.SetNum(InputIdx + 1);
+		CustomNode->Inputs[InputIdx].InputName = Name;
+		CustomNode->Inputs[InputIdx].Input.Expression = Expr;
+		CustomNode->Inputs[InputIdx].Input.OutputIndex = OutIdx;
+		InputIdx++;
+	};
 
-	CustomNode->Inputs[4].InputName = TEXT("MC");
-	CustomNode->Inputs[4].Input.Expression = ColorParam;
+	AddInput(TEXT("MC"), ColorParam);
+	AddInput(TEXT("MA"), AlphaParam);
+	AddInput(TEXT("TSA"), TSAParam);
+	AddInput(TEXT("EdgeFade"), UVNode, 2); // OutEdgeFade from UV node
 
-	CustomNode->Inputs[5].InputName = TEXT("MA");
-	CustomNode->Inputs[5].Input.Expression = AlphaParam;
-
-	// Shared combiner HLSL (matches WebWowViewerCpp commonM2Material.glsl exactly)
-	FString CombinerBody = FString::Printf(TEXT(
-		"float3 t1 = Tex1;\n"
-		"float t1a = Tex1A;\n"
-		"float3 t2 = Tex2;\n"
-		"float t2a = Tex2A;\n"
-		"float3 mc = MC;\n"
-		"float3 diff = mc * t1;\n"
+	// Build the HLSL code
+	// All 37 combiner cases matching WebWowViewerCpp commonM2Material.glsl exactly
+	FString Code = FString::Printf(TEXT(
+		"float3 t1 = Tex1; float t1a = Tex1A;\n"
+		"float3 t2 = Tex2; float t2a = Tex2A;\n"
+		"float3 t3 = Tex3; float t3a = Tex3A;\n"
+		"float t4a = Tex4A;\n"
+		"float3 mc = MC * EdgeFade;\n"
+		"float mcAlpha = MA * EdgeFade;\n"
+		"float3 tsa = TSA;\n"
+		"float3 diff = float3(0,0,0);\n"
 		"float3 spec = float3(0,0,0);\n"
 		"float da = 1.0;\n"
+		"bool canDiscard = false;\n"
 		"\n"
 		"int c = %d;\n"
-		"if (c == 0) { diff = mc * t1; da = 1.0; }\n"
-		"else if (c == 1) { diff = mc * t1; da = t1a; }\n"
-		"else if (c == 2) { diff = mc * t1 * t2; da = t2a; }\n"
-		"else if (c == 3) { diff = mc * t1 * t2 * 2.0; da = saturate(t2a * 2.0); }\n"
-		"else if (c == 4) { diff = mc * t1 * t2 * 2.0; da = 1.0; }\n"
-		"else if (c == 5) { diff = mc * t1 * t2; da = 1.0; }\n"
-		"else if (c == 6) { diff = mc * t1 * t2; da = t1a * t2a; }\n"
-		"else if (c == 7) { diff = mc * t1 * t2 * 2.0; da = saturate(t1a * t2a * 2.0); }\n"
-		"else if (c == 8) { diff = mc * t1; spec = t2; da = saturate(t1a + t2a); }\n"
-		"else if (c == 9) { diff = mc * t1 * t2 * 2.0; da = t1a; }\n"
-		"else if (c == 10) { diff = mc * t1; spec = t2; da = t1a; }\n"
-		"else if (c == 11) { diff = mc * t1 * t2; da = t1a; }\n"
-		"else if (c == 12) { diff = mc * lerp(t1 * t2 * 2.0, t1, t1a); da = 1.0; }\n"
-		"else if (c == 13) { diff = mc * t1; spec = t2 * t2a; da = 1.0; }\n"
-		"else if (c == 14) { diff = mc * t1; spec = t2 * t2a * (1.0 - t1a); da = 1.0; }\n"
+		"if (c == 0) { diff = mc * t1; }\n"
+		"else if (c == 1) { diff = mc * t1; da = t1a; canDiscard = true; }\n"
+		"else if (c == 2) { diff = mc * t1 * t2; da = t2a; canDiscard = true; }\n"
+		"else if (c == 3) { diff = mc * t1 * t2 * 2.0; da = t2a * 2.0; canDiscard = true; }\n"
+		"else if (c == 4) { diff = mc * t1 * t2 * 2.0; }\n"
+		"else if (c == 5) { diff = mc * t1 * t2; }\n"
+		"else if (c == 6) { diff = mc * t1 * t2; da = t1a * t2a; canDiscard = true; }\n"
+		"else if (c == 7) { diff = mc * t1 * t2 * 2.0; da = t1a * t2a * 2.0; canDiscard = true; }\n"
+		"else if (c == 8) { diff = mc * t1; spec = t2; da = t1a + t2a; canDiscard = true; }\n"
+		"else if (c == 9) { diff = mc * t1 * t2 * 2.0; da = t1a; canDiscard = true; }\n"
+		"else if (c == 10) { diff = mc * t1; spec = t2; da = t1a; canDiscard = true; }\n"
+		"else if (c == 11) { diff = mc * t1 * t2; da = t1a; canDiscard = true; }\n"
+		"else if (c == 12) { diff = mc * lerp(t1 * t2 * 2.0, t1, t1a); }\n"
+		"else if (c == 13) { diff = mc * t1; spec = t2 * t2a; }\n"
+		"else if (c == 14) { diff = mc * t1; spec = t2 * t2a * (1.0 - t1a); }\n"
+		"else if (c == 15) { diff = mc * lerp(t1 * t2 * 2.0, t1, t1a); spec = t3 * t3a * tsa.b; }\n"
+		"else if (c == 16) { diff = mc * t1; da = t1a; canDiscard = true; spec = t2 * t2a; }\n"
+		"else if (c == 17) { diff = mc * t1; da = t1a + t2a * (0.3*t2.r+0.59*t2.g+0.11*t2.b); canDiscard = true; spec = t2 * t2a * (1.0-t1a); }\n"
+		"else if (c == 18) { diff = mc * lerp(lerp(t1, t2, t2a), t1, t1a); }\n"
+		"else if (c == 19) { diff = mc * lerp(t1 * t2 * 2.0, t3, t3a); }\n"
+		"else if (c == 20) { diff = mc * t1; spec = t2 * t2a * tsa.g; }\n"
+		"else if (c == 21) { diff = mc * t1; da = t1a + t2a; canDiscard = true; spec = t2 * (1.0-t1a); }\n"
+		"else if (c == 22) { diff = mc * lerp(t1 * t2, t1, t1a); }\n"
+		"else if (c == 23) { diff = mc * t1; da = t1a; canDiscard = true; spec = t2 * t2a * tsa.g; }\n"
+		"else if (c == 24) { diff = mc * lerp(t1, t2, t2a); spec = t1 * t1a * tsa.r; }\n"
+		"else if (c == 25) { float glow = saturate(t3a * tsa.b); diff = mc * lerp(t1*t2*2.0, t1, t1a) * (1.0-glow); spec = t3 * glow; }\n"
+		"else if (c == 26) { diff = mc * lerp(lerp(float4(t1,t1a), float4(t2,t2a), saturate(tsa.g)), float4(t3,t3a), saturate(tsa.b)).rgb; da = lerp(lerp(float4(t1,t1a), float4(t2,t2a), saturate(tsa.g)), float4(t3,t3a), saturate(tsa.b)).a; canDiscard = true; }\n"
+		"else if (c == 27) { diff = mc * lerp(lerp(t1*t2*2.0, t3, t3a), t1, t1a); }\n"
+		"else if (c == 28) { diff = mc * lerp(lerp(float4(t1,t1a), float4(t2,t2a), saturate(tsa.g)), float4(t3,t3a), saturate(tsa.b)).rgb; da = lerp(lerp(float4(t1,t1a), float4(t2,t2a), saturate(tsa.g)), float4(t3,t3a), saturate(tsa.b)).a * t4a; canDiscard = true; }\n"
+		"else if (c == 29) { diff = mc * lerp(t1, t2, t2a); }\n"
+		"else if (c == 30) { diff = mc * lerp(t1 * lerp(float3(1,1,1), t2 * float3(1,1,1), t2a), t3 * float3(1,1,1), t3a); da = t1a; canDiscard = true; }\n"
+		"else if (c == 31) { diff = mc * t1 * lerp(float3(1,1,1), t2 * float3(1,1,1), t2a); da = t1a; canDiscard = true; }\n"
+		"else if (c == 32) { diff = mc * lerp(t1 * lerp(float3(1,1,1), t2 * float3(1,1,1), t2a), t3 * float3(1,1,1), t3a); }\n"
+		"else if (c == 33) { diff = mc * t1; da = t1a; canDiscard = true; }\n"
+		"else if (c == 34) { da = t1a; canDiscard = true; }\n"
+		"else if (c == 35) { float4 r = float4(t1,t1a) * float4(t2,t2a) * float4(t3,t3a); diff = mc * r.rgb; da = r.a; canDiscard = true; }\n"
+		"else if (c == 36) { diff = mc * t1 * t2; da = t1a * t2a; canDiscard = true; }\n"
 		"\n"
-		"da = saturate(da * MA);\n"
 	), CombinerID);
 
-	// Main node — WoW-style lighting: diffuse darkened, spec additive (matches retail WoW)
-	CustomNode->OutputType = CMOT_Float4;
-	CustomNode->Code = CombinerBody + TEXT(
+	// Final alpha output — matches WebWowViewerCpp per-blendMode logic
+	Code += FString::Printf(TEXT(
+		"float finalAlpha;\n"
+		"int bm = %d;\n"
+		"if (bm == 1) {\n"
+		"  finalAlpha = canDiscard ? da : 1.0;\n"
+		"} else if (bm == 0) {\n"
+		"  finalAlpha = 1.0;\n"
+		"} else {\n"
+		"  finalAlpha = saturate(da * mcAlpha);\n"
+		"}\n"
+	), static_cast<int32>(BlendMode));
+
+	Code += TEXT(
 		"float3 litDiff = diff * 0.55;\n"
 		"float3 result = litDiff + spec;\n"
-		"return float4(result, da);\n"
+		"return float4(result, finalAlpha);\n"
 	);
 
+	CustomNode->Code = Code;
 	Mat->GetExpressionCollection().AddExpression(CustomNode);
-	Mat->SetShadingModel(MSM_Unlit);
 
-	Mat->GetEditorOnlyData()->EmissiveColor.Expression = CustomNode;
+	// Extract RGB for emissive, A for opacity/mask from the float4 output
+	auto* ColorMask = NewObject<UMaterialExpressionComponentMask>(Mat);
+	ColorMask->Input.Expression = CustomNode;
+	ColorMask->R = true; ColorMask->G = true; ColorMask->B = true; ColorMask->A = false;
+	Mat->GetExpressionCollection().AddExpression(ColorMask);
+
+	auto* AlphaMask = NewObject<UMaterialExpressionComponentMask>(Mat);
+	AlphaMask->Input.Expression = CustomNode;
+	AlphaMask->R = false; AlphaMask->G = false; AlphaMask->B = false; AlphaMask->A = true;
+	Mat->GetExpressionCollection().AddExpression(AlphaMask);
+
+	Mat->GetEditorOnlyData()->EmissiveColor.Expression = ColorMask;
 
 	if (Mat->BlendMode == BLEND_Masked)
-	{
-		Mat->GetEditorOnlyData()->OpacityMask.Expression = CustomNode;
-		Mat->GetEditorOnlyData()->OpacityMask.OutputIndex = 4;
-	}
+		Mat->GetEditorOnlyData()->OpacityMask.Expression = AlphaMask;
 	else if (Mat->BlendMode == BLEND_Translucent || Mat->BlendMode == BLEND_Additive)
-	{
-		Mat->GetEditorOnlyData()->Opacity.Expression = CustomNode;
-		Mat->GetEditorOnlyData()->Opacity.OutputIndex = 4;
-	}
+		Mat->GetEditorOnlyData()->Opacity.Expression = AlphaMask;
 
 	Mat->PostEditChange();
 	return Mat;
@@ -335,13 +561,17 @@ void SWowModelPreview::SetM2Model(const FWowM2ModelData& ModelData, M2Loader* In
 			Pivots[i] = FVector(ModelData.Bones[i].Pivot);
 		Animator->SetUEPivots(Pivots);
 
-		TArray<int32> ColorIndices, TexWeightIndices;
+		TArray<int32> ColorIndices, TexWeightIndices, TexWeightIndices1, TexWeightIndices2;
+		TArray<uint8> TUFlags;
 		for (const auto& Sub : ModelData.SubMeshes)
 		{
 			ColorIndices.Add(Sub.ColorIndex);
 			TexWeightIndices.Add(Sub.TexWeightIndex);
+			TexWeightIndices1.Add(Sub.TexWeightIndex1);
+			TexWeightIndices2.Add(Sub.TexWeightIndex2);
+			TUFlags.Add(Sub.TUFlags);
 		}
-		Animator->SetSubmeshInfo(ColorIndices, TexWeightIndices);
+		Animator->SetSubmeshInfo(ColorIndices, TexWeightIndices, TexWeightIndices1, TexWeightIndices2, TUFlags);
 		Animator->StopAnimation();
 	}
 
@@ -397,19 +627,26 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 		Resolved[i] = FMath::Clamp(static_cast<int32>(VertIdx), 0, VertCount - 1);
 	}
 
-	// All checkbox-visible submeshes (alpha handled by material swap, not mesh rebuild)
+	// All checkbox-visible submeshes, sorted by priority then materialLayer
 	TArray<int32> VisibleSubmeshIndices;
 	BuiltSubmeshMap.Empty();
 	for (int32 i = 0; i < MD.SubMeshes.Num(); ++i)
 	{
 		if (SubMeshVisible.IsValidIndex(i) && SubMeshVisible[i])
-		{
-			BuiltSubmeshMap.Add(i);
 			VisibleSubmeshIndices.Add(i);
-		}
 	}
 	if (VisibleSubmeshIndices.Num() == 0)
 		return;
+
+	VisibleSubmeshIndices.Sort([&MD](int32 A, int32 B) {
+		const auto& SA = MD.SubMeshes[A];
+		const auto& SB = MD.SubMeshes[B];
+		if (SA.Priority != SB.Priority) return SA.Priority < SB.Priority;
+		if (SA.MaterialLayer != SB.MaterialLayer) return SA.MaterialLayer < SB.MaterialLayer;
+		return A < B;
+	});
+
+	BuiltSubmeshMap = VisibleSubmeshIndices;
 
 	// Tri-to-group mapping
 	TArray<int32> TriGroup;
@@ -851,6 +1088,7 @@ void SWowModelPreview::UpdateSubmeshAlphaVisibility()
 	if (!Animator || !MeshComponent) return;
 
 	const auto& AnimData = Animator->GetSubmeshAnimData();
+	const auto& TexTransforms = Animator->GetTexTransforms();
 
 	for (int32 Section = 0; Section < BuiltSubmeshMap.Num() && Section < SectionMIDs.Num(); ++Section)
 	{
@@ -861,10 +1099,26 @@ void SWowModelPreview::UpdateSubmeshAlphaVisibility()
 		bool bShouldShow = Data.Alpha > 0.15f;
 		bool bCurrentlyShown = SectionVisible.IsValidIndex(Section) && SectionVisible[Section];
 
-		// Always update MID params so they're ready when section becomes visible
-		SectionMIDs[Section]->SetVectorParameterValue(TEXT("MeshColor"),
+		auto* MID = SectionMIDs[Section];
+
+		MID->SetVectorParameterValue(TEXT("MeshColor"),
 			FLinearColor(Data.Color.R, Data.Color.G, Data.Color.B));
-		SectionMIDs[Section]->SetScalarParameterValue(TEXT("MeshAlpha"), Data.Alpha);
+		MID->SetScalarParameterValue(TEXT("MeshAlpha"), Data.Alpha);
+		MID->SetVectorParameterValue(TEXT("TexSampleAlpha"),
+			FLinearColor(Data.TexSampleAlpha.X, Data.TexSampleAlpha.Y, Data.TexSampleAlpha.Z));
+
+		const auto& Sub = CurrentModelData.SubMeshes[OrigIdx];
+		auto SetTM = [&](int32 TransIdx, const TCHAR* R0Name, const TCHAR* R1Name)
+		{
+			if (TransIdx >= 0 && TransIdx < TexTransforms.Num())
+			{
+				const auto& TM = TexTransforms[TransIdx];
+				MID->SetVectorParameterValue(R0Name, FLinearColor(TM.Row0.X, TM.Row0.Y, TM.Row0.Z, TM.Row0.W));
+				MID->SetVectorParameterValue(R1Name, FLinearColor(TM.Row1.X, TM.Row1.Y, TM.Row1.Z, TM.Row1.W));
+			}
+		};
+		SetTM(Sub.TexTransformIndex0, TEXT("TM0R0"), TEXT("TM0R1"));
+		SetTM(Sub.TexTransformIndex1, TEXT("TM1R0"), TEXT("TM1R1"));
 
 		if (bShouldShow && !bCurrentlyShown)
 		{

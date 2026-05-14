@@ -28,8 +28,13 @@ struct WOWLIB_API FWowSubMeshData
 	int32 VertexShaderID = 0;  // Resolved vertex shader mode (0-18)
 	int32 ColorIndex = -1;     // Index into M2 colors array (-1 = none)
 	int32 TexWeightIndex = -1; // Resolved index into M2 textureWeights array (-1 = none)
+	int32 TexWeightIndex1 = -1;    // Texture weight for slot 1 (-1 = none)
+	int32 TexWeightIndex2 = -1;    // Texture weight for slot 2 (-1 = none)
 	int32 TexTransformIndex0 = -1; // Texture transform for tex1 (-1 = none)
 	int32 TexTransformIndex1 = -1; // Texture transform for tex2 (-1 = none)
+	int8 Priority = 0;             // TextureUnit sort priority
+	uint16 MaterialLayer = 0;      // Material layer for render order
+	uint8 TUFlags = 0;             // TextureUnit flags (0x40 = don't applyWeight)
 };
 
 struct WOWLIB_API FWowTextureRef

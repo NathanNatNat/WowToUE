@@ -298,11 +298,23 @@ bool FWowM2Loader::LoadM2(uint32 FileDataID, FWowM2ModelData& OutModel, FM2LoadR
 					if (TU.colorIndex < static_cast<uint16_t>(Loader.colors.size()))
 						Sub.ColorIndex = TU.colorIndex;
 
-					if (TU.textureWeightComboIndex < static_cast<uint16_t>(Loader.transparencyLookup.size()))
+					Sub.Priority = TU.priority;
+					Sub.MaterialLayer = TU.materialLayer;
+					Sub.TUFlags = TU.flags;
+
+					for (int32 Slot = 0; Slot < FMath::Min(static_cast<int32>(TU.textureCount), 3); ++Slot)
 					{
-						uint16_t Idx = Loader.transparencyLookup[TU.textureWeightComboIndex];
-						if (Idx < static_cast<uint16_t>(Loader.textureWeights.size()))
-							Sub.TexWeightIndex = Idx;
+						uint16_t LookupIdx = TU.textureWeightComboIndex + Slot;
+						if (LookupIdx < static_cast<uint16_t>(Loader.transparencyLookup.size()))
+						{
+							uint16_t Idx = Loader.transparencyLookup[LookupIdx];
+							if (Idx < static_cast<uint16_t>(Loader.textureWeights.size()))
+							{
+								if (Slot == 0) Sub.TexWeightIndex = Idx;
+								else if (Slot == 1) Sub.TexWeightIndex1 = Idx;
+								else Sub.TexWeightIndex2 = Idx;
+							}
+						}
 					}
 
 					// Resolve texture transform indices
