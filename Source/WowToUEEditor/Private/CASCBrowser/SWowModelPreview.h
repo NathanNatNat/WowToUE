@@ -83,6 +83,9 @@ private:
 	TArray<uint16> SubMeshIDs;
 	TArray<int32> BuiltSubmeshMap;
 	TArray<UMaterialInstanceDynamic*> SectionMIDs;
+	TArray<UMaterialInterface*> SectionOriginalMats;
+	TArray<bool> SectionVisible;
+	static UMaterial* InvisibleMaterial;
 	TArray<FString> SubMeshLabels;
 	FWowM2ModelData CurrentModelData;
 

@@ -91,6 +91,8 @@ void SWowModelPreview::ClearModel()
 
 DEFINE_LOG_CATEGORY_STATIC(LogWowPreview, Log, All);
 
+UMaterial* SWowModelPreview::InvisibleMaterial = nullptr;
+
 static FString GetGeosetGroupName(int32 Index, uint16 SubmeshID)
 {
 	static const TMap<int32, FString> Groups = {
@@ -285,13 +287,13 @@ UMaterial* SWowModelPreview::CreateCombinerMaterial(const TArray<UTexture2D*>& T
 		"da = saturate(da * MA);\n"
 	), CombinerID);
 
-	// Main node — apply WoW-style lighting + screen blend for glow (prevents white clipping)
+	// Main node — WoW-style lighting + screen blend for glow
+	// MA (MeshAlpha) only affects da (opacity for masked/translucent), not color brightness
+	// Visibility is handled by material swap to invisible material when alpha=0
 	CustomNode->OutputType = CMOT_Float4;
 	CustomNode->Code = CombinerBody + TEXT(
-		"float a = saturate(MA);\n"
-		"float3 litDiff = diff * 0.55 * a;\n"
-		"float3 litSpec = spec * a;\n"
-		"float3 result = litDiff + litSpec * (1.0 - litDiff);\n"
+		"float3 litDiff = diff * 0.55;\n"
+		"float3 result = litDiff + spec * (1.0 - litDiff);\n"
 		"return float4(result, da);\n"
 	);
 
@@ -397,14 +399,12 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 		Resolved[i] = FMath::Clamp(static_cast<int32>(VertIdx), 0, VertCount - 1);
 	}
 
-	// Visible submeshes: checkbox-visible AND alpha-visible
+	// All checkbox-visible submeshes (alpha handled by material swap, not mesh rebuild)
 	TArray<int32> VisibleSubmeshIndices;
 	BuiltSubmeshMap.Empty();
 	for (int32 i = 0; i < MD.SubMeshes.Num(); ++i)
 	{
-		bool bCheckbox = SubMeshVisible.IsValidIndex(i) && SubMeshVisible[i];
-		bool bAlpha = !SubMeshAlphaVisible.IsValidIndex(i) || SubMeshAlphaVisible[i];
-		if (bCheckbox && bAlpha)
+		if (SubMeshVisible.IsValidIndex(i) && SubMeshVisible[i])
 		{
 			BuiltSubmeshMap.Add(i);
 			VisibleSubmeshIndices.Add(i);
@@ -641,13 +641,32 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 	MeshComponent->SetSkinnedAssetAndUpdate(PreviewMesh);
 	PreviewScene->AddComponent(MeshComponent, FTransform(WowOrient));
 
-	// Create MIDs for per-submesh alpha control
+	// Create invisible material (once) for hiding sections without mesh rebuild
+	if (!InvisibleMaterial)
+	{
+		InvisibleMaterial = NewObject<UMaterial>(GetTransientPackage(), NAME_None, RF_Transient | RF_MarkAsRootSet);
+		InvisibleMaterial->BlendMode = BLEND_Masked;
+		InvisibleMaterial->SetShadingModel(MSM_Unlit);
+		InvisibleMaterial->bUsedWithSkeletalMesh = true;
+		InvisibleMaterial->OpacityMaskClipValue = 0.5f;
+		auto* ZeroConst = NewObject<UMaterialExpressionConstant>(InvisibleMaterial);
+		ZeroConst->R = 0.f;
+		InvisibleMaterial->GetExpressionCollection().AddExpression(ZeroConst);
+		InvisibleMaterial->GetEditorOnlyData()->OpacityMask.Expression = ZeroConst;
+		InvisibleMaterial->PostEditChange();
+	}
+
+	// Create MIDs for per-submesh color/alpha control
 	SectionMIDs.Empty();
+	SectionOriginalMats.Empty();
+	SectionVisible.Empty();
 	for (int32 i = 0; i < MeshComponent->GetNumMaterials(); ++i)
 	{
 		UMaterialInterface* BaseMat = MeshComponent->GetMaterial(i);
 		UMaterialInstanceDynamic* MID = UMaterialInstanceDynamic::Create(BaseMat, MeshComponent);
 		SectionMIDs.Add(MID);
+		SectionOriginalMats.Add(MID);
+		SectionVisible.Add(true);
 		MeshComponent->SetMaterial(i, MID);
 	}
 
@@ -831,43 +850,33 @@ void SWowModelPreview::ApplyCreatureDisplay(const FWowCreatureDisplay& Display)
 
 void SWowModelPreview::UpdateSubmeshAlphaVisibility()
 {
-	if (!Animator) return;
+	if (!Animator || !MeshComponent) return;
 
 	const auto& AnimData = Animator->GetSubmeshAnimData();
 
-	// Check if any submesh visibility changed (alpha crossing 0) — rebuild if so
-	bool bNeedRebuild = false;
-	for (int32 i = 0; i < SubMeshVisible.Num() && i < AnimData.Num(); ++i)
+	for (int32 Section = 0; Section < BuiltSubmeshMap.Num() && Section < SectionMIDs.Num(); ++Section)
 	{
-		bool bWasVisible = !SubMeshAlphaVisible.IsValidIndex(i) || SubMeshAlphaVisible[i];
-		bool bNowVisible = AnimData[i].Alpha > 0.001f;
-		if (bWasVisible != bNowVisible)
+		int32 OrigIdx = BuiltSubmeshMap[Section];
+		if (!AnimData.IsValidIndex(OrigIdx)) continue;
+
+		const auto& Data = AnimData[OrigIdx];
+		bool bShouldShow = Data.Alpha > 0.15f;
+		bool bCurrentlyShown = SectionVisible.IsValidIndex(Section) && SectionVisible[Section];
+
+		// Always update MID params so they're ready when section becomes visible
+		SectionMIDs[Section]->SetVectorParameterValue(TEXT("MeshColor"),
+			FLinearColor(Data.Color.R, Data.Color.G, Data.Color.B));
+		SectionMIDs[Section]->SetScalarParameterValue(TEXT("MeshAlpha"), Data.Alpha);
+
+		if (bShouldShow && !bCurrentlyShown)
 		{
-			if (SubMeshAlphaVisible.IsValidIndex(i))
-				SubMeshAlphaVisible[i] = bNowVisible;
-			bNeedRebuild = true;
+			MeshComponent->SetMaterial(Section, SectionOriginalMats[Section]);
+			SectionVisible[Section] = true;
 		}
-	}
-
-	if (bNeedRebuild && !bIsRebuildingMesh)
-	{
-		bIsRebuildingMesh = true;
-		RebuildMesh();
-		bIsRebuildingMesh = false;
-	}
-
-	// Drive continuous color/alpha on MIDs
-	if (MeshComponent)
-	{
-		for (int32 Section = 0; Section < BuiltSubmeshMap.Num() && Section < SectionMIDs.Num(); ++Section)
+		else if (!bShouldShow && bCurrentlyShown)
 		{
-			int32 OrigIdx = BuiltSubmeshMap[Section];
-			if (!AnimData.IsValidIndex(OrigIdx)) continue;
-
-			const auto& Data = AnimData[OrigIdx];
-			SectionMIDs[Section]->SetVectorParameterValue(TEXT("MeshColor"),
-				FLinearColor(Data.Color.R, Data.Color.G, Data.Color.B));
-			SectionMIDs[Section]->SetScalarParameterValue(TEXT("MeshAlpha"), Data.Alpha);
+			MeshComponent->SetMaterial(Section, InvisibleMaterial);
+			SectionVisible[Section] = false;
 		}
 	}
 }
