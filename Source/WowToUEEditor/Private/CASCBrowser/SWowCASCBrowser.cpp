@@ -844,6 +844,12 @@ void SWowCASCBrowser::BuildGeosetPanel()
 	}
 
 	GeosetPanel->SetVisibility(EVisibility::Visible);
+
+	// Auto-select first creature skin (matches wow.export behavior)
+	if (CreatureDisplays.Num() > 0 && SkinListView.IsValid())
+	{
+		SkinListView->SetSelection(CreatureDisplays[0]);
+	}
 }
 
 void SWowCASCBrowser::OnGeosetToggled(int32 Index, ECheckBoxState NewState)

@@ -87,4 +87,5 @@ private:
 	FWowM2ModelData CurrentModelData;
 
 	TSharedPtr<FWowM2Animator> Animator;
+	bool bIsRebuildingMesh = false;
 };

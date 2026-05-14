@@ -285,11 +285,14 @@ UMaterial* SWowModelPreview::CreateCombinerMaterial(const TArray<UTexture2D*>& T
 		"da = saturate(da * MA);\n"
 	), CombinerID);
 
-	// Main node — combine diffuse (darkened by ambient) + spec (full brightness glow)
+	// Main node — apply WoW-style lighting + screen blend for glow (prevents white clipping)
 	CustomNode->OutputType = CMOT_Float4;
 	CustomNode->Code = CombinerBody + TEXT(
-		"float3 litDiff = diff * 0.55;\n"
-		"return float4(litDiff + spec, da);\n"
+		"float a = saturate(MA);\n"
+		"float3 litDiff = diff * 0.55 * a;\n"
+		"float3 litSpec = spec * a;\n"
+		"float3 result = litDiff + litSpec * (1.0 - litDiff);\n"
+		"return float4(result, da);\n"
 	);
 
 	Mat->GetExpressionCollection().AddExpression(CustomNode);
@@ -830,32 +833,41 @@ void SWowModelPreview::UpdateSubmeshAlphaVisibility()
 {
 	if (!Animator) return;
 
-	const auto& Alphas = Animator->GetSubmeshAlphas();
-	bool bNeedRebuild = false;
+	const auto& AnimData = Animator->GetSubmeshAnimData();
 
-	for (int32 i = 0; i < SubMeshVisible.Num() && i < Alphas.Num(); ++i)
+	// Check if any submesh visibility changed (alpha crossing 0) — rebuild if so
+	bool bNeedRebuild = false;
+	for (int32 i = 0; i < SubMeshVisible.Num() && i < AnimData.Num(); ++i)
 	{
-		bool bWasAlphaVisible = !SubMeshAlphaVisible.IsValidIndex(i) || SubMeshAlphaVisible[i];
-		bool bNowAlphaVisible = Alphas[i] > 0.f;
-		if (bWasAlphaVisible != bNowAlphaVisible)
+		bool bWasVisible = !SubMeshAlphaVisible.IsValidIndex(i) || SubMeshAlphaVisible[i];
+		bool bNowVisible = AnimData[i].Alpha > 0.001f;
+		if (bWasVisible != bNowVisible)
 		{
 			if (SubMeshAlphaVisible.IsValidIndex(i))
-				SubMeshAlphaVisible[i] = bNowAlphaVisible;
+				SubMeshAlphaVisible[i] = bNowVisible;
 			bNeedRebuild = true;
 		}
 	}
 
-	if (bNeedRebuild)
+	if (bNeedRebuild && !bIsRebuildingMesh)
+	{
+		bIsRebuildingMesh = true;
 		RebuildMesh();
+		bIsRebuildingMesh = false;
+	}
 
-	// Drive color multiplier on visible sections
+	// Drive continuous color/alpha on MIDs
 	if (MeshComponent)
 	{
 		for (int32 Section = 0; Section < BuiltSubmeshMap.Num() && Section < SectionMIDs.Num(); ++Section)
 		{
 			int32 OrigIdx = BuiltSubmeshMap[Section];
-			float Alpha = Alphas.IsValidIndex(OrigIdx) ? Alphas[OrigIdx] : 1.f;
-			SectionMIDs[Section]->SetScalarParameterValue(TEXT("MeshAlpha"), Alpha);
+			if (!AnimData.IsValidIndex(OrigIdx)) continue;
+
+			const auto& Data = AnimData[OrigIdx];
+			SectionMIDs[Section]->SetVectorParameterValue(TEXT("MeshColor"),
+				FLinearColor(Data.Color.R, Data.Color.G, Data.Color.B));
+			SectionMIDs[Section]->SetScalarParameterValue(TEXT("MeshAlpha"), Data.Alpha);
 		}
 	}
 }

@@ -32,8 +32,15 @@ public:
 	bool bCloseRightHand = false;
 	bool bCloseLeftHand = false;
 
+	struct FSubmeshAnimData
+	{
+		FLinearColor Color = FLinearColor::White;
+		float Alpha = 1.f;
+	};
+
 	const TArray<FTransform>& GetBoneLocalTransforms() const { return BoneLocalTransforms; }
 	const TArray<float>& GetSubmeshAlphas() const { return SubmeshAlphas; }
+	const TArray<FSubmeshAnimData>& GetSubmeshAnimData() const { return SubmeshAnimData; }
 	void SetSubmeshInfo(const TArray<int32>& InColorIndices, const TArray<int32>& InTexWeightIndices);
 	bool IsPlaying() const { return bIsPlaying; }
 
@@ -66,4 +73,5 @@ private:
 	TArray<int32> SubmeshColorIndices;
 	TArray<int32> SubmeshTexWeightIndices;
 	TArray<float> SubmeshAlphas;
+	TArray<FSubmeshAnimData> SubmeshAnimData;
 };

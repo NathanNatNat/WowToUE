@@ -370,9 +370,14 @@ void FWowM2Animator::SetSubmeshInfo(const TArray<int32>& InColorIndices, const T
 {
 	SubmeshColorIndices = InColorIndices;
 	SubmeshTexWeightIndices = InTexWeightIndices;
-	SubmeshAlphas.SetNumUninitialized(InColorIndices.Num());
-	for (int32 i = 0; i < SubmeshAlphas.Num(); ++i)
+	int32 Count = InColorIndices.Num();
+	SubmeshAlphas.SetNumUninitialized(Count);
+	SubmeshAnimData.SetNum(Count);
+	for (int32 i = 0; i < Count; ++i)
+	{
 		SubmeshAlphas[i] = 1.f;
+		SubmeshAnimData[i] = FSubmeshAnimData();
+	}
 }
 
 static float SampleTrackFloat(const M2Track& Track, int32 AnimIdx, float TimeMs, float Default)
@@ -424,23 +429,56 @@ void FWowM2Animator::CalcSubmeshAlphas()
 
 	for (int32 i = 0; i < SubmeshAlphas.Num(); ++i)
 	{
-		float Alpha = 1.f;
+		float ColorAlpha = 1.f;
+		FLinearColor ColorRGB = FLinearColor::White;
 
 		int32 ColorIdx = SubmeshColorIndices.IsValidIndex(i) ? SubmeshColorIndices[i] : -1;
 		if (ColorIdx >= 0 && ColorIdx < static_cast<int32>(Loader->colors.size()))
 		{
 			float A = SampleTrackFloat(Loader->colors[ColorIdx].alpha, AnimIdx, TimeMs, 32767.f);
-			Alpha *= A / 32768.f;
+			ColorAlpha = A / 32768.f;
+
+			// Sample color RGB track
+			FVector RGB = SampleVec3(0, 0, AnimIdx, TimeMs, FVector(1, 1, 1));
+			const M2Track& ColorTrack = Loader->colors[ColorIdx].color;
+			if (AnimIdx >= 0 && AnimIdx < static_cast<int32>(ColorTrack.timestamps.size()) && !ColorTrack.timestamps[AnimIdx].empty())
+			{
+				FVector C = FVector::OneVector;
+				if (ColorTrack.values[AnimIdx].size() == 1 || TimeMs <= GetTimestampMs(ColorTrack.timestamps[AnimIdx][0]))
+					C = GetVec3(ColorTrack.values[AnimIdx][0], FVector::OneVector);
+				else if (TimeMs >= GetTimestampMs(ColorTrack.timestamps[AnimIdx].back()))
+					C = GetVec3(ColorTrack.values[AnimIdx].back(), FVector::OneVector);
+				else
+				{
+					int32 Frame = FindKeyframe(ColorTrack.timestamps[AnimIdx], TimeMs);
+					float T0 = GetTimestampMs(ColorTrack.timestamps[AnimIdx][Frame]);
+					float T1 = GetTimestampMs(ColorTrack.timestamps[AnimIdx][Frame + 1]);
+					float Dt = T1 - T0;
+					float Frac = Dt > 0.f ? FMath::Min((TimeMs - T0) / Dt, 1.f) : 0.f;
+					FVector V0 = GetVec3(ColorTrack.values[AnimIdx][Frame], FVector::OneVector);
+					FVector V1 = GetVec3(ColorTrack.values[AnimIdx][Frame + 1], FVector::OneVector);
+					C = FMath::Lerp(V0, V1, Frac);
+				}
+				ColorRGB = FLinearColor(C.X, C.Y, C.Z);
+			}
 		}
 
+		float TexWeight = 1.f;
 		int32 WeightIdx = SubmeshTexWeightIndices.IsValidIndex(i) ? SubmeshTexWeightIndices[i] : -1;
 		if (WeightIdx >= 0 && WeightIdx < static_cast<int32>(Loader->textureWeights.size()))
 		{
 			float W = SampleTrackFloat(Loader->textureWeights[WeightIdx], AnimIdx, TimeMs, 32767.f);
-			Alpha *= W / 32768.f;
+			TexWeight = W / 32768.f;
 		}
 
-		SubmeshAlphas[i] = Alpha;
+		float FinalAlpha = ColorAlpha * TexWeight;
+		SubmeshAlphas[i] = FinalAlpha;
+
+		if (SubmeshAnimData.IsValidIndex(i))
+		{
+			SubmeshAnimData[i].Color = ColorRGB;
+			SubmeshAnimData[i].Alpha = FinalAlpha;
+		}
 	}
 }
 
