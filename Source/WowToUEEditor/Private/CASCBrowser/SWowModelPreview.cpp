@@ -205,8 +205,6 @@ UMaterial* SWowModelPreview::CreateCombinerMaterial(const TArray<UTexture2D*>& T
 		auto* TexNode = NewObject<UMaterialExpressionTextureSample>(Mat);
 		TexNode->Texture = Textures[i];
 		TexNode->SamplerType = SAMPLERTYPE_Color;
-		if (i >= 1)
-			TexNode->ConstCoordinate = 1;
 		Mat->GetExpressionCollection().AddExpression(TexNode);
 		TexNodes.Add(TexNode);
 	}
@@ -256,14 +254,13 @@ UMaterial* SWowModelPreview::CreateCombinerMaterial(const TArray<UTexture2D*>& T
 	CustomNode->Inputs[5].InputName = TEXT("MA");
 	CustomNode->Inputs[5].Input.Expression = AlphaParam;
 
-	// HLSL combiner — outputs float4(combined color, alpha)
-	CustomNode->Code = FString::Printf(TEXT(
+	// Shared combiner HLSL (matches WebWowViewerCpp commonM2Material.glsl exactly)
+	FString CombinerBody = FString::Printf(TEXT(
 		"float3 t1 = Tex1;\n"
 		"float t1a = Tex1A;\n"
 		"float3 t2 = Tex2;\n"
 		"float t2a = Tex2A;\n"
 		"float3 mc = MC;\n"
-		"float ma = MA;\n"
 		"float3 diff = mc * t1;\n"
 		"float3 spec = float3(0,0,0);\n"
 		"float da = 1.0;\n"
@@ -285,15 +282,20 @@ UMaterial* SWowModelPreview::CreateCombinerMaterial(const TArray<UTexture2D*>& T
 		"else if (c == 13) { diff = mc * t1; spec = t2 * t2a; da = 1.0; }\n"
 		"else if (c == 14) { diff = mc * t1; spec = t2 * t2a * (1.0 - t1a); da = 1.0; }\n"
 		"\n"
-		"da = saturate(da * ma);\n"
-		"return float4(diff + spec, da);\n"
+		"da = saturate(da * MA);\n"
 	), CombinerID);
 
-	Mat->GetExpressionCollection().AddExpression(CustomNode);
+	// Main node — combine diffuse (darkened by ambient) + spec (full brightness glow)
+	CustomNode->OutputType = CMOT_Float4;
+	CustomNode->Code = CombinerBody + TEXT(
+		"float3 litDiff = diff * 0.55;\n"
+		"return float4(litDiff + spec, da);\n"
+	);
 
-	// Route: combined color → EmissiveColor (unlit-style for now), alpha → opacity
-	Mat->GetEditorOnlyData()->EmissiveColor.Expression = CustomNode;
+	Mat->GetExpressionCollection().AddExpression(CustomNode);
 	Mat->SetShadingModel(MSM_Unlit);
+
+	Mat->GetEditorOnlyData()->EmissiveColor.Expression = CustomNode;
 
 	if (Mat->BlendMode == BLEND_Masked)
 	{
@@ -587,6 +589,19 @@ void SWowModelPreview::RebuildMesh(bool bFitCamera)
 			}
 			TexSlots.Add(Tex);
 		}
+
+		// Debug: log per-submesh texture info
+		FString TexInfo;
+		for (int32 t = 0; t < FMath::Min(static_cast<int32>(Sub.TextureCount), 4); ++t)
+		{
+			uint16 ComboIdx = Sub.TextureComboIndex + t;
+			uint16 TexIdx = (ComboIdx < MD.TextureCombos.Num()) ? MD.TextureCombos[ComboIdx] : 0xFFFF;
+			uint32 TexType = (TexIdx < static_cast<uint16>(MD.Textures.Num())) ? MD.Textures[TexIdx].Type : 0;
+			uint32 FileID = (TexIdx < static_cast<uint16>(MD.Textures.Num())) ? MD.Textures[TexIdx].FileDataID : 0;
+			TexInfo += FString::Printf(TEXT(" tex%d=[idx=%d type=%d fid=%d]"), t, TexIdx, TexType, FileID);
+		}
+		UE_LOG(LogWowPreview, Log, TEXT("SubMesh[%d] id=%d ps=%d vs=%d blend=%d flags=0x%x texCount=%d%s"),
+			OldIdx, Sub.SubmeshID, Sub.PixelShaderID, Sub.VertexShaderID, Sub.BlendMode, Sub.MaterialFlags, Sub.TextureCount, *TexInfo);
 
 		bool bNeedsAlpha = (Sub.ColorIndex >= 0 || Sub.TexWeightIndex >= 0);
 		UMaterialInterface* Mat;
